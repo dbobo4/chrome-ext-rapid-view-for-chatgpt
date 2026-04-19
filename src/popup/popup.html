@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rapid View for ChatGPT</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header class="popup__header">
+        <div class="popup__header-bar">
+          <div class="popup__header-copy">
+            <h1>Rapid View for ChatGPT</h1>
+          </div>
+          <label class="header-toggle" aria-label="Enabled">
+            <input id="enabled" type="checkbox">
+          </label>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="mode-switch" role="tablist" aria-label="Reader mode">
+          <button id="manualModeButton" class="mode-switch__option" type="button" data-mode="manual" aria-pressed="true">Manual</button>
+          <button id="dynamicButton" class="mode-switch__option" type="button" data-mode="dynamic" aria-pressed="false">Dynamic</button>
+          <input id="dynamicScroll" type="checkbox" hidden>
+        </div>
+
+        <div class="panel-state" aria-live="polite">
+          <strong id="statusState" class="panel-state__badge" data-state="loading">Loading...</strong>
+        </div>
+      </section>
+    </main>
+
+    <script src="../shared/constants.js"></script>
+    <script src="../shared/settings.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

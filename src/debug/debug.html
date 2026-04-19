@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rapid View for ChatGPT Debug Log</title>
+  <link rel="stylesheet" href="debug.css">
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <h1>Rapid View for ChatGPT Debug Log</h1>
+        <p>Leave this tab open while reproducing the freeze. It updates from extension-local storage.</p>
+      </div>
+      <div class="actions">
+        <button id="refreshButton" type="button">Refresh</button>
+        <button id="copyButton" type="button">Copy</button>
+        <button id="clearButton" type="button">Clear</button>
+      </div>
+    </section>
+
+    <section class="meta">
+      <div class="meta-card">
+        <span class="meta-label">Updated</span>
+        <span id="updatedAt">-</span>
+      </div>
+      <div class="meta-card">
+        <span class="meta-label">Route</span>
+        <span id="routeKey">-</span>
+      </div>
+      <div class="meta-card">
+        <span class="meta-label">Entries</span>
+        <span id="entryCount">0</span>
+      </div>
+    </section>
+
+    <section class="log-shell">
+      <label class="log-label" for="logOutput">Log Output</label>
+      <textarea id="logOutput" spellcheck="false" readonly></textarea>
+    </section>
+  </main>
+
+  <script src="debug.js"></script>
+</body>
+</html>

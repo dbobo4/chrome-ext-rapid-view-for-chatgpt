@@ -1,0 +1,306 @@
+[
+  {
+    "id": "hungarian_long_text",
+    "label": "Hungarian long text baseline",
+    "description": "Close to the currently failing archive rendered table case with long Hungarian prose in the right column.",
+    "intro_html": "<p>Igen, a Rapid View for ChatGPT összességében jó név. Nem tökéletes, de eddig ez az egyik legerősebb jelölted.</p><p>Az értékelésem:</p>",
+    "outro_html": "<p>A tiszta verdict: ez a scenario a mostani hibát próbálja vizuálisan reprodukálni.</p>",
+    "table": {
+      "header": [
+        {
+          "html": "Értékelés",
+          "header": true
+        },
+        {
+          "html": "Miért",
+          "header": true
+        }
+      ],
+      "rows": [
+        [
+          {
+            "html": "8.5/10"
+          },
+          {
+            "html": "Nem megy rá a tipikus <span data-chip=\"true\">Speed Booster</span>, <span data-chip=\"true\">Lag Remover</span>, <span data-chip=\"true\">Optimizer</span>, <span data-chip=\"true\">Turbo</span> sablonra. A most látható nevek között inkább a gyors megjelenítés és a rendered nézet kontrollált kezelése érződik."
+          }
+        ],
+        [
+          {
+            "html": "7/10"
+          },
+          {
+            "html": "A <span data-chip=\"true\">for ChatGPT</span> rész segít, mert egyértelmű célplatformot ad. A <span data-chip=\"true\">Rapid</span> utal gyorsulásra, de a felhasználók valószínűleg inkább a konkrét előnyt keresik, például a gördülékenyebb olvashatóságot."
+          }
+        ],
+        [
+          {
+            "html": "7.5/10"
+          },
+          {
+            "html": "A <span data-chip=\"true\">View</span> nem teljesen sebességszó, de jól passzol ahhoz, hogy a bővítmény a látható és rendered üzenetek nézetét optimalizálja, nem pedig a ChatGPT válaszidejét ígéri."
+          }
+        ],
+        [
+          {
+            "html": "8/10"
+          },
+          {
+            "html": "Rövid, tiszta, nem túl technikai, nem túl brandes. Könnyű kimondani és visszaidézni."
+          }
+        ],
+        [
+          {
+            "html": "9/10"
+          },
+          {
+            "html": "Repo névként jól működik, például <span data-chip=\"true\">rapid-view-for-chatgpt</span> formában."
+          }
+        ],
+        [
+          {
+            "html": "6/10"
+          },
+          {
+            "html": "Itt a gyenge pont a <span data-chip=\"true\">ChatGPT</span>. Az OpenAI hivatalos brand oldalára utalva ez public store névnél érzékenyebb lehet, még akkor is, ha a felhasználók egyből tudják mire való."
+          }
+        ],
+        [
+          {
+            "html": "8/10"
+          },
+          {
+            "html": "A gyors keresésben nem láttam egyértelmű, pontos egyezést erre a névre a Chrome Web Store találatok között, ezért működhet, de a választott szöveg vége most is nehezen elérhető max-right scroll után.<span data-rv-end-sentinel=\"true\" aria-hidden=\"true\"></span>"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "id": "long_no_space_token",
+    "label": "Long no-space token",
+    "description": "Checks how long unbroken tokens influence horizontal width and max-right reach.",
+    "intro_html": "<p>Ez a scenario direkt hosszú, egybefüggő tokeneket használ, hogy kiderüljön mennyire torzul a scroll-szélesség.</p>",
+    "outro_html": "<p>A cél itt is az, hogy max-right scroll után a legvége ténylegesen látható legyen.</p>",
+    "table": {
+      "header": [
+        {
+          "html": "Token",
+          "header": true
+        },
+        {
+          "html": "Magyarázat",
+          "header": true
+        }
+      ],
+      "rows": [
+        [
+          {
+            "html": "A"
+          },
+          {
+            "html": "rapidviewforchatgpt_horizontal_scroll_intrinsic_width_measurement_case_001_without_natural_breakpoints_and_with_realistic_sentence_tail_to_check_visibility_end"
+          }
+        ],
+        [
+          {
+            "html": "B"
+          },
+          {
+            "html": "A normál szöveg mellett ez az egybefüggő token mutatja meg, hogy a táblázat tényleges scrollWidth-je mennyire követi a vizuális szélességet."
+          }
+        ],
+        [
+          {
+            "html": "C"
+          },
+          {
+            "html": "A végpontnak itt is teljesen látszania kell, különben a scrollbar csak részben hasznos.<span data-rv-end-sentinel=\"true\" aria-hidden=\"true\"></span>"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "id": "mixed_badges_links",
+    "label": "Badges and links",
+    "description": "Mix of inline chips, links, and prose in cells.",
+    "intro_html": "<p>Itt inline badge-ek, linkek és normál mondatok vannak összekeverve egy cellán belül.</p>",
+    "outro_html": "<p>Ez segít kiszúrni, ha a chip-szerű elemek vagy a linkek torzítják a scroll szélességét.</p>",
+    "table": {
+      "header": [
+        {
+          "html": "Elem",
+          "header": true
+        },
+        {
+          "html": "Megjegyzés",
+          "header": true
+        }
+      ],
+      "rows": [
+        [
+          {
+            "html": "Badge"
+          },
+          {
+            "html": "A <span data-chip=\"true\">Rapid</span> + <span data-chip=\"true\">Rendered</span> + <span data-chip=\"true\">Archive</span> kombináció néha széthúzza a mérést, főleg akkor, ha utána még hosszú magyarázó mondat következik ugyanabban a cellában."
+          }
+        ],
+        [
+          {
+            "html": "Link"
+          },
+          {
+            "html": "A leírás végén egy link is van: <a href=\"https://example.com/docs/table-scroll\">example.com/docs/table-scroll</a>, és a scrollnak így is el kell érnie az egész sort."
+          }
+        ],
+        [
+          {
+            "html": "Mix"
+          },
+          {
+            "html": "A kombinált tartalom miatt a jobb szélső rész gyakran pont a kártya lekerekített széle alá csúszik, ezt kell kizárni.<span data-rv-end-sentinel=\"true\" aria-hidden=\"true\"></span>"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "id": "nested_blocks",
+    "label": "Nested block content",
+    "description": "Paragraphs, lists, and blockquote inside the right column.",
+    "intro_html": "<p>Ez a case blokkszintű elemekkel terheli a cellát.</p>",
+    "outro_html": "<p>Ha itt jó a scroll, akkor valószínűleg a blokkleszármazottak szélességszámítása is rendben van.</p>",
+    "table": {
+      "header": [
+        {
+          "html": "Szegmens",
+          "header": true
+        },
+        {
+          "html": "Részletek",
+          "header": true
+        }
+      ],
+      "rows": [
+        [
+          {
+            "html": "Lista"
+          },
+          {
+            "html": "<div><p>Az első blokk bevezető szöveg.</p><ul><li>Első hosszú pont, ami végigfut a soron és segít megmutatni a valódi szélességet.</li><li>Második hosszú pont szintén széles tartalommal.</li></ul></div>"
+          }
+        ],
+        [
+          {
+            "html": "Quote"
+          },
+          {
+            "html": "<blockquote>Ez a blokkquote azért van itt, hogy a belső block layout ne nyelje el a scrollhoz szükséges természetes szélességet.</blockquote>"
+          }
+        ],
+        [
+          {
+            "html": "Zárás"
+          },
+          {
+            "html": "<section><h4>Megfigyelés</h4><p>A right edge itt is teljesen látható kell legyen.<span data-rv-end-sentinel=\"true\" aria-hidden=\"true\"></span></p></section>"
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "id": "colspan_rowspan",
+    "label": "Colspan and rowspan",
+    "description": "Exercises table structure complexity while keeping the right edge observable.",
+    "intro_html": "<p>Ez a scenario colspan és rowspan kombinációkat is tartalmaz.</p>",
+    "outro_html": "<p>Ha ez is jól működik, akkor a strukturált táblák sem törik meg a scrollt.</p>",
+    "table": {
+      "header": [
+        {
+          "html": "Szempont",
+          "header": true
+        },
+        {
+          "html": "Rész A",
+          "header": true
+        },
+        {
+          "html": "Rész B",
+          "header": true
+        }
+      ],
+      "rows": [
+        [
+          {
+            "html": "Szerkezet",
+            "rowspan": 2
+          },
+          {
+            "html": "Az első sorban külön cellák vannak."
+          },
+          {
+            "html": "A jobb oldali rész itt még rövidebb."
+          }
+        ],
+        [
+          {
+            "html": "A második sor első jobb cellája."
+          },
+          {
+            "html": "A második sor utolsó cellája hosszabb megfigyeléssel arról, hogy a scroll végén se legyen levágás."
+          }
+        ],
+        [
+          {
+            "html": "Összegzés"
+          },
+          {
+            "html": "Ez a két oszlopot összefogó záró szakasz továbbra is elérhető kell legyen a végpontig.",
+            "colspan": 2,
+            "end": true
+          }
+        ]
+      ]
+    }
+  },
+  {
+    "id": "code_block_cell",
+    "label": "Code block in cell",
+    "description": "Includes a code block inside a table cell while keeping prose around it.",
+    "intro_html": "<p>Ez a scenario a code block önálló scrollját és a táblázat horizontális scrollját együtt terheli.</p>",
+    "outro_html": "<p>A code block ne rontsa el a jobb szélső szöveg elérését.</p>",
+    "table": {
+      "header": [
+        {
+          "html": "Típus",
+          "header": true
+        },
+        {
+          "html": "Tartalom",
+          "header": true
+        }
+      ],
+      "rows": [
+        [
+          {
+            "html": "Code"
+          },
+          {
+            "html": "<div data-rv-code-block=\"true\"><div data-rv-code-header=\"true\">example.ts</div><pre><code>const example = \\\"A very long code block that should stay self-contained\\\";\\nconst scroll = () =&gt; \\\"Table scroll should still reach the real end.\\\";\\n</code></pre></div>"
+          }
+        ],
+        [
+          {
+            "html": "Megjegyzés"
+          },
+          {
+            "html": "A code block utáni prózaszövegnek ugyanúgy teljesen láthatónak kell lennie a jobb szélen, nem maradhat félig levágva.<span data-rv-end-sentinel=\"true\" aria-hidden=\"true\"></span>"
+          }
+        ]
+      ]
+    }
+  }
+]

@@ -1,0 +1,158 @@
+[
+  {
+    "id": "baseline_current_prod_like",
+    "label": "Baseline current prod-like",
+    "description": "Mimics the current production-like table strategy as a comparison baseline.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "none",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "block_intrinsic_24",
+    "label": "Block intrinsic + gutter 24",
+    "description": "Adds intrinsic block descendants with the current 24px end gutter.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "block_intrinsic_32",
+    "label": "Block intrinsic + gutter 32",
+    "description": "Like the current preferred direction, but with a larger end gutter.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 32
+    }
+  },
+  {
+    "id": "block_intrinsic_16",
+    "label": "Block intrinsic + gutter 16",
+    "description": "Tests whether a smaller real gutter is still enough.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 16
+    }
+  },
+  {
+    "id": "full_min_width_block_intrinsic",
+    "label": "Full min width + intrinsic blocks",
+    "description": "Keeps table min-width at 100% while preserving intrinsic block widths.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "full",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "no_min_width_block_intrinsic",
+    "label": "No min width + intrinsic blocks",
+    "description": "Lets the table shrink to pure intrinsic width plus gutter.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "none",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "track_inline_block",
+    "label": "Inline-block track",
+    "description": "Tests whether inline-block track width behaves better than inline-flex.",
+    "settings": {
+      "track_display": "inline-block",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "content_auto_blocks_intrinsic",
+    "label": "Content auto + intrinsic blocks",
+    "description": "Uses auto width at the cell-content wrapper and intrinsic width for inner blocks.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "auto",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "content_fit_blocks_intrinsic",
+    "label": "Content fit-content + intrinsic blocks",
+    "description": "Uses fit-content wrapper width while preserving intrinsic block descendants.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "fit-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 24
+    }
+  },
+  {
+    "id": "aggressive_wrap_reference",
+    "label": "Aggressive wrap reference",
+    "description": "Reference case that intentionally favors wrapping over horizontal reach.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "full",
+      "cell_content_width": "max-content",
+      "block_width_mode": "none",
+      "descendant_wrap_mode": "anywhere",
+      "end_gutter_px": 0
+    }
+  },
+  {
+    "id": "wide_gutter_no_block_intrinsic",
+    "label": "Wide gutter only",
+    "description": "Checks whether gutter alone helps when intrinsic block sizing is not enabled.",
+    "settings": {
+      "track_display": "inline-flex",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "none",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 32
+    }
+  },
+  {
+    "id": "inline_block_track_32",
+    "label": "Inline-block track + gutter 32",
+    "description": "Combines inline-block track with wider gutter and intrinsic blocks.",
+    "settings": {
+      "track_display": "inline-block",
+      "table_min_width_mode": "minus_gutter",
+      "cell_content_width": "max-content",
+      "block_width_mode": "max-content",
+      "descendant_wrap_mode": "normal",
+      "end_gutter_px": 32
+    }
+  }
+]

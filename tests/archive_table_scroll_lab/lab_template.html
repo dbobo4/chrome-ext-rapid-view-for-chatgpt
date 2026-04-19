@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rapid View Archive Table Scroll Lab</title>
+  <link rel="stylesheet" href="lab.css">
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <h1>Archive Table Scroll Lab</h1>
+      <p>Visual comparison harness for the rendered archive table right-edge scroll bug. Pick a scenario, compare many variants, and mark the winner before changing the real extension code.</p>
+    </section>
+
+    <section class="controls">
+      <div class="control">
+        <label for="scenarioSelect">Scenario</label>
+        <select id="scenarioSelect"></select>
+      </div>
+      <div class="control">
+        <label for="modeSelect">Frame</label>
+        <select id="modeSelect">
+          <option value="manual">Manual</option>
+          <option value="dynamic">Dynamic-like</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="viewportSelect">Viewport Width</label>
+        <select id="viewportSelect">
+          <option value="480">480 px</option>
+          <option value="640">640 px</option>
+          <option value="760" selected>760 px</option>
+          <option value="920">920 px</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="variantFilterSelect">Variant Filter</label>
+        <select id="variantFilterSelect">
+          <option value="all">All variants</option>
+          <option value="pass">Passing only</option>
+          <option value="fail">Failing only</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="winner-shell">
+      <div class="winner-copy">
+        <span class="section-label">Current Winner</span>
+        <span id="winnerValue" class="winner-value">No winner selected yet.</span>
+      </div>
+      <div class="variant-actions">
+        <button id="refreshMetricsButton" type="button" class="secondary">Refresh Metrics</button>
+        <button id="scrollAllStartButton" type="button" class="secondary">Scroll All Start</button>
+        <button id="scrollAllEndButton" type="button" class="secondary">Scroll All End</button>
+        <button id="copyWinnerButton" type="button">Copy Winner JSON</button>
+      </div>
+    </section>
+
+    <section>
+      <span class="section-label">Variants</span>
+      <div id="variantGrid" class="variant-grid"></div>
+    </section>
+  </main>
+
+  <script src="lab.js"></script>
+</body>
+</html>

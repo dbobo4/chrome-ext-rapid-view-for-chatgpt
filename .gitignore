@@ -1,0 +1,81 @@
+# OS / system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / smoke / temp
+.pytest_cache/
+.pytest_tmp/
+.pytest-tmp/
+.pytest-tmp*/
+.pytest_tmp*/
+.tmp_*/
+tmp_*/
+temp_*/
+smoke_artifacts*/
+manual_*/
+.manual_*/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Secrets / env / local config
+.env
+.env.*
+*.env
+*.local
+!.env.example
+!*.env.example
+!*example*.env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.mdb
+db_dumps/
+dump_*/
+
+# JavaScript / frontend dependencies and build outputs
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Logs / reports / exports
+*.log
+logs/
+reports/
+debug_outputs/
+
+# Archives / bulky local artifacts
+*.zip
+*.7z
+*.tar
+*.gz
+
+# Internal workflow files
+AGENTS.md
+**/AGENTS.md
+agents.md
+**/agents.md

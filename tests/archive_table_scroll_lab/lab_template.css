@@ -1,0 +1,454 @@
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: linear-gradient(180deg, #edf2f8 0%, #e4ecf5 100%);
+  color: #203447;
+  font: 14px/1.5 "Segoe UI", sans-serif;
+}
+
+body {
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.page {
+  max-width: 1480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.hero,
+.controls,
+.winner-shell,
+.variant-card {
+  border: 1px solid rgba(103, 122, 157, 0.18);
+  border-radius: 20px;
+  background: rgba(248, 251, 255, 0.86);
+  box-shadow: 0 18px 42px rgba(29, 45, 70, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.hero {
+  padding: 22px 24px;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.hero p {
+  margin: 0;
+  color: #53657f;
+}
+
+.controls {
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control label,
+.section-label {
+  font: 700 11px/1.2 "Segoe UI", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b7d96;
+}
+
+.control select,
+.control button,
+.winner-shell button,
+.variant-actions button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, #5f7190 0%, #475670 100%);
+  color: #f8fbff;
+  font: 600 13px/1 "Segoe UI", sans-serif;
+  cursor: pointer;
+}
+
+.control select {
+  appearance: none;
+  background: linear-gradient(180deg, #eef4fb 0%, #e0e8f3 100%);
+  color: #23354b;
+  border: 1px solid rgba(111, 130, 162, 0.22);
+}
+
+.winner-shell {
+  padding: 16px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.winner-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.winner-value {
+  color: #41556f;
+  font: 13px/1.45 Consolas, "Courier New", monospace;
+}
+
+.variant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.variant-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.variant-card.is-pass {
+  border-color: rgba(61, 145, 92, 0.32);
+}
+
+.variant-card.is-fail {
+  border-color: rgba(184, 90, 90, 0.28);
+}
+
+.variant-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.variant-head h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.variant-head p {
+  margin: 0;
+  color: #53657f;
+  font-size: 13px;
+}
+
+.variant-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 62px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font: 700 12px/1 "Segoe UI", sans-serif;
+}
+
+.variant-status.pass {
+  background: rgba(77, 160, 106, 0.16);
+  color: #2b7244;
+}
+
+.variant-status.fail {
+  background: rgba(191, 96, 96, 0.16);
+  color: #8b3838;
+}
+
+.variant-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(222, 231, 242, 0.9);
+  color: #41556f;
+  font: 600 12px/1 "Segoe UI", sans-serif;
+}
+
+.variant-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(234, 241, 249, 0.9);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-label {
+  color: #6b7d96;
+  font: 700 10px/1.2 "Segoe UI", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.metric-value {
+  color: #24384e;
+  font: 12px/1.4 Consolas, "Courier New", monospace;
+}
+
+.variant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.variant-actions button.secondary,
+.winner-shell button.secondary {
+  background: linear-gradient(180deg, #f0f5fb 0%, #e1e9f4 100%);
+  color: #27405d;
+  border: 1px solid rgba(111, 130, 162, 0.22);
+}
+
+.render-frame {
+  --rv-preview-width: 760px;
+  display: flex;
+  justify-content: center;
+}
+
+.render-frame.manual .rv-archive-card {
+  width: min(100%, var(--rv-preview-width));
+}
+
+.render-frame.dynamic {
+  padding: 12px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(233, 238, 247, 0.98), rgba(219, 227, 241, 0.95));
+  border: 1px solid rgba(89, 108, 142, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42), 0 14px 36px rgba(49, 69, 101, 0.08);
+}
+
+.render-frame.dynamic .rv-archive-card {
+  width: min(100%, var(--rv-preview-width));
+  max-height: 330px;
+  overflow: hidden;
+}
+
+.rv-archive-card {
+  position: relative;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(101, 120, 154, 0.22);
+  background: linear-gradient(180deg, rgba(236, 241, 248, 0.99), rgba(224, 232, 244, 0.97));
+  color: #22364b;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48), 0 14px 30px rgba(35, 52, 78, 0.06);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.rv-archive-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.rv-label {
+  font: 600 11px/1.2 "Segoe UI", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #657da2;
+}
+
+.rv-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.rv-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font: 600 11px/1 "Segoe UI", sans-serif;
+  color: #445c7e;
+  background: linear-gradient(180deg, rgba(245, 248, 252, 0.96), rgba(224, 232, 243, 0.96));
+  border: 1px solid rgba(112, 130, 164, 0.2);
+}
+
+.rv-tab.active {
+  color: #2e4a72;
+  background: linear-gradient(180deg, rgba(112, 151, 222, 0.3), rgba(85, 120, 188, 0.24));
+  border-color: rgba(77, 114, 180, 0.24);
+}
+
+.rv-archive-body {
+  font: 14px/1.55 "Segoe UI", sans-serif;
+  color: #25394f;
+}
+
+.rv-archive-body p {
+  margin: 0 0 10px;
+}
+
+[data-chip="true"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(83, 109, 158, 0.1);
+  color: #315274;
+  font: 600 11px/1 "Segoe UI", sans-serif;
+}
+
+[data-rv-code-block="true"] {
+  margin: 0 0 10px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(103, 122, 156, 0.2);
+  background: rgba(205, 216, 234, 0.86);
+}
+
+[data-rv-code-header="true"] {
+  padding: 8px 10px;
+  font: 700 11px/1.2 "Segoe UI", sans-serif;
+  color: #3a5374;
+  background: linear-gradient(180deg, rgba(214, 224, 239, 0.98), rgba(202, 214, 233, 0.96));
+}
+
+[data-rv-code-block="true"] pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre;
+  font: 12px/1.5 Consolas, "Courier New", monospace;
+  color: #22364d;
+}
+
+[data-rv-table-shell] {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 0 10px;
+  border: 1px solid rgba(95, 114, 147, 0.16);
+  border-radius: 10px;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: rgba(233, 239, 248, 0.82);
+}
+
+[data-rv-table-scroll] {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+}
+
+[data-rv-table-track] {
+  display: inline-flex;
+  align-items: stretch;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+[data-rv-table] {
+  display: table;
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: calc(100% - var(--rv-end-gutter, 24px));
+  max-width: none;
+  margin: 0;
+  table-layout: auto;
+  border-collapse: collapse;
+  border-spacing: 0;
+  box-sizing: border-box;
+}
+
+[data-rv-table-end-gutter] {
+  display: block;
+  flex: 0 0 var(--rv-end-gutter, 24px);
+  width: var(--rv-end-gutter, 24px);
+  min-width: var(--rv-end-gutter, 24px);
+  pointer-events: none;
+  background: transparent;
+}
+
+[data-rv-table] th,
+[data-rv-table] td {
+  padding: 8px 10px;
+  border: 1px solid rgba(95, 114, 147, 0.16);
+  box-sizing: border-box;
+  text-align: left;
+  vertical-align: top;
+  color: #25394f;
+  font: 400 14px/1.55 "Segoe UI", sans-serif;
+}
+
+[data-rv-table] th {
+  color: #233a57;
+  font-weight: 600;
+  background: rgba(219, 228, 241, 0.72);
+}
+
+[data-rv-table-cell-content] {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.footer-note {
+  color: #50637d;
+  font-size: 13px;
+}
+
+@media (max-width: 960px) {
+  body {
+    padding: 14px;
+  }
+
+  .controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  .variant-grid {
+    grid-template-columns: 1fr;
+  }
+}
