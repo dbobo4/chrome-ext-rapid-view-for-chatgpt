@@ -209,4 +209,4 @@ This project is more about custom page virtualization and DOM management than ab
 
 ## License
 
-No license file is currently included in this repository.
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
