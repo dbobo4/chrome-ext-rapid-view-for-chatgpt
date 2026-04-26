@@ -229,7 +229,7 @@
       });
 
       copyButton.addEventListener("click", async () => {
-        const value = this.logElement ? this.logElement.value : "";
+        const value = this.getCopyText();
         try {
           await navigator.clipboard.writeText(value);
           copyButton.textContent = "Copied";
@@ -270,6 +270,10 @@
       this.bodyElement = body;
     }
 
+    getCopyText() {
+      return this.entries.join("\n").replace(/\n+$/u, "");
+    }
+
     append(entry) {
       if (!this.debugEnabled) {
         return;
@@ -304,7 +308,7 @@
         return;
       }
 
-      this.logElement.value = this.entries.join("\n");
+      this.logElement.value = this.getCopyText();
       this.logElement.scrollTop = this.logElement.scrollHeight;
     }
 
@@ -1858,6 +1862,7 @@
       this.root = null;
       this.scrollContainer = null;
       this.records = [];
+      this.manualArchiveEntries = new Map();
       this.archiveUi = null;
       this.domMutationDepth = 0;
       this.ignoreOwnRootMutationsUntil = 0;
@@ -1904,6 +1909,9 @@
       if (!hadDynamicScroll && this.settings.dynamicScroll) {
         this.dynamicCurrentSliceIndex = -1;
         this.dynamicSliceCount = 0;
+        for (const record of this.records) {
+          this.restorePendingManualRecord(record);
+        }
       }
       if (hadDynamicScroll && !this.settings.dynamicScroll) {
         this.resetDynamicScrollTracking(true);
@@ -1946,6 +1954,7 @@
       this.root = root;
       this.scrollContainer = scrollContainer;
       this.rebuildRecords(messageNodes, preserveExistingState);
+      this.syncManualArchiveEntries();
       this.updateDynamicScrollBinding();
       this.lastScrollTop = this.scrollContainer ? this.scrollContainer.scrollTop : 0;
       this.refreshWindow("bind");
@@ -1966,6 +1975,7 @@
       this.root = null;
       this.scrollContainer = null;
       this.records = [];
+      this.manualArchiveEntries = new Map();
       this.archiveActive = false;
       this.hiddenCount = 0;
       this.detectedTurnCount = 0;
@@ -2008,6 +2018,10 @@
       if (!shouldArchive) {
         this.archiveActive = false;
         this.lastActivationTrigger = "";
+        this.clearDeferredSnapshotTimer();
+        this.clearDeferredPlainTextTimer();
+        this.pendingRichSnapshotIds = [];
+        this.pendingPlainTextIds = [];
         this.showEntireHistory();
         this.updateDynamicScrollBinding();
         this.emitStatus();
@@ -2065,7 +2079,13 @@
           previous.dynamicChromeHeightPx = previous.dynamicChromeHeightPx || 0;
           previous.dynamicUnits = Array.isArray(previous.dynamicUnits) ? previous.dynamicUnits : [];
           previous.dynamicRenderedHeight = previous.dynamicRenderedHeight || 0;
+          previous.archivePending = Boolean(previous.archivePending);
+          previous.manualPendingOriginalStyles = Array.isArray(previous.manualPendingOriginalStyles)
+            ? previous.manualPendingOriginalStyles
+            : [];
           previous.snapshotState = previous.snapshotState
+            || ((previous.snapshotHtml || previous.richHtml || previous.plainTextFallback) ? "ready" : "empty");
+          previous.indexState = previous.indexState
             || ((previous.snapshotHtml || previous.richHtml || previous.plainTextFallback) ? "ready" : "empty");
           previous.state = "live";
           previous.keepVisible = false;
@@ -2102,7 +2122,10 @@
           dynamicChromeHeightPx: 0,
           dynamicUnits: [],
           dynamicRenderedHeight: 0,
+          archivePending: false,
+          manualPendingOriginalStyles: [],
           snapshotState: "empty",
+          indexState: "empty",
           state: "live",
           keepVisible: false,
           viewMode: "simple"
@@ -2122,6 +2145,240 @@
       });
     }
 
+    syncManualArchiveEntries() {
+      const validIds = new Set(this.records.map((record) => record.id));
+
+      for (const entryId of Array.from(this.manualArchiveEntries.keys())) {
+        if (!validIds.has(entryId)) {
+          this.manualArchiveEntries.delete(entryId);
+        }
+      }
+
+      for (const record of this.records) {
+        const entry = this.manualArchiveEntries.get(record.id);
+        if (!entry) {
+          continue;
+        }
+
+        entry.role = record.role;
+      }
+    }
+
+    getManualLiveTurnCount() {
+      return Math.max(1, LIMITS.manualLiveTurnCount || 2);
+    }
+
+    getManualArchiveEntry(recordOrId) {
+      const entryId = typeof recordOrId === "string"
+        ? recordOrId
+        : recordOrId && recordOrId.id;
+      return entryId ? (this.manualArchiveEntries.get(entryId) || null) : null;
+    }
+
+    isManualArchiveEntry(record) {
+      return Boolean(record && this.manualArchiveEntries.get(record.id) === record);
+    }
+
+    hasReadyManualArchiveEntry(recordOrId) {
+      const entry = this.getManualArchiveEntry(recordOrId);
+      return this.hasStrictReadyManualArchiveEntry(entry);
+    }
+
+    normalizeArchiveText(text) {
+      return String(text || "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    isArchiveFallbackText(text) {
+      const normalized = this.normalizeArchiveText(text).toLowerCase();
+      return normalized === "archived content unavailable."
+        || normalized === "preparing archived message..."
+        || normalized === "preparing rendered archived message...";
+    }
+
+    hasUsableArchiveText(text) {
+      const normalized = this.normalizeArchiveText(text);
+      return Boolean(normalized && !this.isArchiveFallbackText(normalized));
+    }
+
+    isArchiveFallbackHtml(html) {
+      if (!html || !html.trim()) {
+        return false;
+      }
+
+      const container = document.createElement("div");
+      container.innerHTML = html.trim();
+      const text = this.normalizeArchiveText(container.textContent || "");
+
+      if (!this.isArchiveFallbackText(text)) {
+        return false;
+      }
+
+      return !container.querySelector("pre, table, math, .katex, .katex-display, mjx-container, .MathJax, img, picture, canvas, svg, video, audio, iframe, object, embed, hr, [data-rapid-view-for-chatgpt-code-block], [data-rapid-view-for-chatgpt-table-shell], [data-rapid-view-for-chatgpt-rich-placeholder]");
+    }
+
+    hasStrictArchiveHtml(html) {
+      return Boolean(html && this.hasMeaningfulArchiveHtml(html) && !this.isArchiveFallbackHtml(html));
+    }
+
+    hasStrictReadyManualArchiveEntry(entry) {
+      return Boolean(
+        entry
+        && (
+          this.hasUsableArchiveText(entry.simpleText)
+          || this.hasStrictArchiveHtml(entry.simpleHtml)
+          || this.hasStrictArchiveHtml(entry.renderedHtml)
+        )
+      );
+    }
+
+    isVisibleManualArchiveEntry(entry) {
+      return Boolean(
+        entry
+        && entry.visible
+        && this.hasStrictReadyManualArchiveEntry(entry)
+      );
+    }
+
+    isRestorableManualEntry(entry) {
+      return this.hasStrictReadyManualArchiveEntry(entry);
+    }
+
+    getVisibleManualArchiveEntries() {
+      const entries = [];
+
+      for (const record of this.records) {
+        if (record.state !== "visibleArchive") {
+          continue;
+        }
+
+        const entry = this.getManualArchiveEntry(record);
+        if (this.isVisibleManualArchiveEntry(entry)) {
+          entries.push(entry);
+        }
+      }
+
+      return entries;
+    }
+
+    buildManualArchiveEntry(record, preferredNodes = null) {
+      if (!record) {
+        return null;
+      }
+
+      const existing = this.getManualArchiveEntry(record);
+      const sourceRoot = this.buildRecordSourceRoot(record, preferredNodes);
+      const cachedPlainText = this.hasUsableArchiveText(record.plainTextFallback)
+        ? String(record.plainTextFallback).trim()
+        : (this.hasUsableArchiveText(existing?.simpleText) ? String(existing.simpleText).trim() : "");
+      const cachedSimpleHtml = this.hasStrictArchiveHtml(record.snapshotHtml)
+        ? record.snapshotHtml.trim()
+        : (this.hasStrictArchiveHtml(existing?.simpleHtml) ? existing.simpleHtml.trim() : "");
+      const cachedRenderedHtml = this.hasStrictArchiveHtml(record.richHtml)
+        ? record.richHtml.trim()
+        : (this.hasStrictArchiveHtml(existing?.renderedHtml) ? existing.renderedHtml.trim() : "");
+
+      if (!(sourceRoot instanceof Element) && !cachedPlainText && !cachedSimpleHtml && !cachedRenderedHtml) {
+        record.manualPayloadState = "pending";
+        record.indexState = record.indexState === "ready" ? "ready" : "queued";
+        return null;
+      }
+
+      let plainText = cachedPlainText;
+      let simpleHtml = cachedSimpleHtml || (cachedPlainText ? this.renderPlainTextHtml(cachedPlainText) : "");
+      let renderedHtml = cachedRenderedHtml;
+
+      if (sourceRoot instanceof Element) {
+        const snapshotSource = this.selectSnapshotSource(sourceRoot, record.role);
+        if (!(snapshotSource instanceof Element) || !this.hasMeaningfulSourceContent(snapshotSource)) {
+          if (cachedPlainText || cachedSimpleHtml || cachedRenderedHtml) {
+            // Continue below with cached payload.
+          } else {
+            record.manualPayloadState = "pending";
+            record.indexState = record.indexState === "ready" ? "ready" : "queued";
+            return null;
+          }
+        } else {
+          const snapshot = this.buildSnapshot(sourceRoot, record.role);
+          const snapshotText = this.hasUsableArchiveText(snapshot.text)
+            ? String(snapshot.text).trim()
+            : "";
+          const extractedText = this.hasUsableArchiveText(this.extractPlainText(sourceRoot))
+            ? String(this.extractPlainText(sourceRoot)).trim()
+            : "";
+          const simpleCandidate = this.hasStrictArchiveHtml(snapshot.simpleHtml)
+            ? snapshot.simpleHtml.trim()
+            : "";
+          const renderedCandidate = this.hasStrictArchiveHtml(snapshot.richHtml)
+            ? snapshot.richHtml.trim()
+            : "";
+
+          plainText = snapshotText || extractedText || cachedPlainText;
+          simpleHtml = simpleCandidate || (plainText ? this.renderPlainTextHtml(plainText) : cachedSimpleHtml);
+          renderedHtml = renderedCandidate || cachedRenderedHtml;
+        }
+      }
+
+      if (
+        !this.hasUsableArchiveText(plainText)
+        && !this.hasStrictArchiveHtml(simpleHtml)
+        && !this.hasStrictArchiveHtml(renderedHtml)
+      ) {
+        record.manualPayloadState = "pending";
+        record.indexState = record.indexState === "ready" ? "ready" : "queued";
+        return null;
+      }
+
+      const nextViewMode = existing ? existing.viewMode : this.getDefaultArchiveViewMode();
+      const entry = existing || {
+        id: record.id,
+        sourceRecordId: record.id,
+        role: record.role,
+        viewMode: nextViewMode,
+        simpleText: "",
+        simpleHtml: "",
+        renderedHtml: "",
+        archiveBlock: null,
+        refreshArchiveBlock: null,
+        simpleExpanded: false,
+        dynamicAutoExpanded: false,
+        visible: false,
+        estimatedHeight: 0
+      };
+
+      entry.role = record.role;
+      entry.viewMode = nextViewMode;
+      entry.sourceRecordId = record.id;
+      entry.simpleText = this.hasUsableArchiveText(plainText) ? plainText : "";
+      entry.simpleHtml = this.hasStrictArchiveHtml(simpleHtml)
+        ? simpleHtml
+        : (entry.simpleText ? this.renderPlainTextHtml(entry.simpleText) : "");
+      entry.renderedHtml = this.hasStrictArchiveHtml(renderedHtml) ? renderedHtml : "";
+      const entryReady = this.hasStrictReadyManualArchiveEntry(entry);
+      entry.visible = Boolean(existing?.visible);
+      entry.estimatedHeight = Math.max(existing?.estimatedHeight || 0, record.estimatedHeight || 0);
+      entry.manualPayloadState = entryReady ? "ready" : "pending";
+
+      if (entry.simpleText) {
+        record.plainTextFallback = entry.simpleText;
+      }
+      if (entry.simpleHtml) {
+        record.snapshotHtml = entry.simpleHtml;
+      }
+      if (entry.renderedHtml) {
+        record.richHtml = entry.renderedHtml;
+      }
+      record.snapshotState = entryReady ? "ready" : "empty";
+      record.indexState = entryReady ? "ready" : "queued";
+      record.manualPayloadState = entryReady ? "ready" : "pending";
+
+      this.manualArchiveEntries.set(record.id, entry);
+      return entryReady ? entry : null;
+    }
+
     seedEstimatedHeights() {
       if (!this.records.length) {
         return;
@@ -2137,6 +2394,9 @@
 
       for (let index = sampleStart; index < this.records.length; index += 1) {
         const record = this.records[index];
+        if (this.isPendingManualArchiveRecord(record)) {
+          continue;
+        }
         const liveHeight = this.measureRecordLiveHeight(record);
         if (liveHeight <= 0) {
           continue;
@@ -2433,6 +2693,126 @@
       record.node = record.nodes[0] || null;
     }
 
+    isPendingManualArchiveRecord(record) {
+      return Boolean(
+        record
+        && (
+          record.state === "pendingArchive"
+          || this.isManualPendingVisualMaskApplied(record)
+        )
+      );
+    }
+
+    getPendingManualStyle(node) {
+      const existing = node.getAttribute("style");
+      return {
+        node,
+        style: existing === null ? null : existing
+      };
+    }
+
+    isManualPendingVisualMaskApplied(record) {
+      return Boolean(
+        record
+        && record.archivePending
+        && record.state === "live"
+        && Array.isArray(record.manualPendingOriginalStyles)
+        && record.manualPendingOriginalStyles.length > 0
+      );
+    }
+
+    restoreManualPendingStyleEntry(entry) {
+      const node = entry && entry.node;
+      if (!(node instanceof HTMLElement)) {
+        return;
+      }
+
+      node.removeAttribute("data-rapid-view-for-chatgpt-pending-archive");
+      node.removeAttribute("data-rapid-view-for-chatgpt-pending-visual-mask");
+      if (entry.style === null) {
+        node.removeAttribute("style");
+      } else if (typeof entry.style === "string") {
+        node.setAttribute("style", entry.style);
+      }
+    }
+
+    applyManualPendingVisualMask(record) {
+      if (!record || this.settings.dynamicScroll) {
+        return false;
+      }
+
+      if (
+        !record.archivePending
+        || record.state !== "live"
+        || this.hasStrictReadyManualArchiveEntry(this.getManualArchiveEntry(record))
+      ) {
+        this.restorePendingManualRecord(record);
+        record.keepVisible = false;
+        return false;
+      }
+
+      const sourceNodes = this.getRecordLiveNodes(record)
+        .filter((node) => node instanceof HTMLElement);
+      if (!sourceNodes.length) {
+        this.restorePendingManualRecord(record);
+        return false;
+      }
+
+      const sourceNodeSet = new Set(sourceNodes);
+      const previousStyles = new Map();
+      const previousEntries = Array.isArray(record.manualPendingOriginalStyles)
+        ? record.manualPendingOriginalStyles
+        : [];
+
+      for (const entry of previousEntries) {
+        const node = entry && entry.node;
+        if (node instanceof HTMLElement && sourceNodeSet.has(node) && !previousStyles.has(node)) {
+          previousStyles.set(node, entry.style);
+        } else {
+          this.restoreManualPendingStyleEntry(entry);
+        }
+      }
+
+      record.manualPendingOriginalStyles = sourceNodes.map((node) => (
+        previousStyles.has(node)
+          ? { node, style: previousStyles.get(node) }
+          : this.getPendingManualStyle(node)
+      ));
+
+      for (const node of sourceNodes) {
+        node.removeAttribute("data-rapid-view-for-chatgpt-pending-archive");
+        node.setAttribute("data-rapid-view-for-chatgpt-pending-visual-mask", "true");
+        Object.assign(node.style, {
+          visibility: "hidden",
+          pointerEvents: "none",
+          userSelect: "none"
+        });
+      }
+
+      record.state = "live";
+      record.keepVisible = false;
+      return true;
+    }
+
+    hidePendingManualRecord(record) {
+      return this.applyManualPendingVisualMask(record);
+    }
+
+    restorePendingManualRecord(record) {
+      if (!record || !Array.isArray(record.manualPendingOriginalStyles)) {
+        return;
+      }
+
+      for (const entry of record.manualPendingOriginalStyles) {
+        this.restoreManualPendingStyleEntry(entry);
+      }
+
+      record.manualPendingOriginalStyles = [];
+      if (record.state === "pendingArchive") {
+        record.state = "live";
+      }
+    }
+
     measureLiveRecords() {
       const sampleStart = Math.max(
         0,
@@ -2494,6 +2874,11 @@
     }
 
     archiveOlderTurns() {
+      if (!this.settings.dynamicScroll) {
+        this.archiveOlderTurnsManual();
+        return;
+      }
+
       if (!this.records.length) {
         this.removeArchiveUi();
         this.hiddenCount = 0;
@@ -2509,35 +2894,37 @@
           const liveNodes = this.getRecordLiveNodes(record);
 
           if (index < firstLiveIndex) {
-            if (!this.hasReadySnapshot(record) && liveNodes.length) {
+            if (liveNodes.length) {
               record.dynamicBaseHeight = this.measureNodes(liveNodes);
               record.estimatedHeight = record.dynamicBaseHeight;
               record.trackHeightPx = record.dynamicBaseHeight;
-              if (!record.plainTextFallback) {
-                const sourceRoot = this.buildRecordSourceRoot(record, liveNodes);
-                record.plainTextFallback = sourceRoot ? this.extractPlainText(sourceRoot) : record.plainTextFallback;
-              }
-              record.detachedSourceNodes = liveNodes.slice();
-              record.detachedSourceNode = record.detachedSourceNodes[0] || null;
-              record.snapshotState = "pending";
             }
 
-            this.removeRecordLiveNodes(record);
-            record.nodes = [];
-            record.node = null;
-            if (record.keepVisible) {
-              record.state = "visibleArchive";
-            } else {
-              record.state = "hidden";
+            if (!this.hasReadySnapshot(record)) {
+              const sourceRoot = liveNodes.length
+                ? this.buildRecordSourceRoot(record, liveNodes)
+                : this.buildRecordSourceRoot(record);
+              const baselineCaptured = this.captureBaselineSnapshot(record, sourceRoot);
+
+              if (!baselineCaptured) {
+                record.archivePending = true;
+                record.indexState = "queued";
+                record.state = "live";
+                record.keepVisible = false;
+                this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+                continue;
+              }
             }
+
+            this.finalizeArchivedRecord(record);
           } else {
             record.state = "live";
             record.keepVisible = false;
+            record.archivePending = false;
             if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
               this.mountRecordNodesBefore(record, null);
             }
-            record.detachedSourceNodes = [];
-            record.detachedSourceNode = null;
+            this.clearRecordSourceNodes(record);
           }
         }
 
@@ -2547,8 +2934,233 @@
       this.hiddenCount = this.countHiddenRecords();
     }
 
+    archiveOlderTurnsManual() {
+      if (!this.records.length) {
+        this.removeArchiveUi();
+        this.hiddenCount = 0;
+        return;
+      }
+
+      const liveTurnCount = Math.min(this.records.length, this.getManualLiveTurnCount());
+      const firstLiveIndex = Math.max(0, this.records.length - liveTurnCount);
+      const readyEntries = new Map();
+      let pendingCount = 0;
+
+      for (let index = firstLiveIndex - 1; index >= 0; index -= 1) {
+        const record = this.records[index];
+        const liveNodes = this.getRecordLiveNodes(record);
+        let entry = this.getManualArchiveEntry(record);
+
+        if (
+          !this.hasStrictReadyManualArchiveEntry(entry)
+          || (liveNodes.length && !this.hasStrictArchiveHtml(entry?.renderedHtml))
+        ) {
+          entry = this.buildManualArchiveEntry(record, liveNodes);
+        }
+
+        if (this.hasStrictReadyManualArchiveEntry(entry)) {
+          record.archivePending = false;
+          record.indexState = "ready";
+          readyEntries.set(record.id, entry);
+        } else {
+          record.archivePending = true;
+          record.indexState = "queued";
+          record.manualPayloadState = "pending";
+          pendingCount += 1;
+          this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+        }
+      }
+
+      this.archiveActive = true;
+      this.withDomMutationGuard(() => {
+        for (let index = 0; index < this.records.length; index += 1) {
+          const record = this.records[index];
+          const liveNodes = this.getRecordLiveNodes(record);
+
+          if (index < firstLiveIndex) {
+            const readyEntry = readyEntries.get(record.id);
+
+            if (readyEntry) {
+              this.restorePendingManualRecord(record);
+
+              if (liveNodes.length) {
+                record.estimatedHeight = this.measureNodes(liveNodes);
+                record.dynamicBaseHeight = record.estimatedHeight;
+                record.trackHeightPx = record.estimatedHeight;
+                readyEntry.estimatedHeight = Math.max(readyEntry.estimatedHeight || 0, record.estimatedHeight || 0);
+              }
+
+              readyEntry.visible = Boolean(readyEntry.visible);
+              readyEntry.viewMode = readyEntry.viewMode || this.getDefaultArchiveViewMode();
+              record.state = readyEntry.visible ? "visibleArchive" : "hidden";
+              record.keepVisible = readyEntry.visible;
+
+              if (liveNodes.length) {
+                this.removeRecordLiveNodes(record);
+              }
+
+              record.nodes = [];
+              record.node = null;
+              record.detachedSourceNodes = [];
+              record.detachedSourceNode = null;
+              record.manualPendingOriginalStyles = [];
+              record.manualPayloadState = "ready";
+            } else {
+              record.state = "live";
+              record.keepVisible = false;
+              record.archivePending = true;
+              if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
+                this.mountRecordNodesBefore(record, null);
+              }
+              this.applyManualPendingVisualMask(record);
+            }
+          } else {
+            this.restorePendingManualRecord(record);
+            record.state = "live";
+            record.keepVisible = false;
+            record.archivePending = false;
+            if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
+              this.mountRecordNodesBefore(record, null);
+            }
+          }
+        }
+
+        this.syncArchiveUi();
+      });
+
+      this.hiddenCount = this.countHiddenRecords();
+      this.logger.info("manual-archive:applied", {
+        readyCount: readyEntries.size,
+        pendingCount,
+        pendingHiddenCount: this.records.filter((record) => this.isPendingManualArchiveRecord(record)).length,
+        hiddenCount: this.hiddenCount,
+        liveTurnCount
+      });
+    }
+
     hasReadySnapshot(record) {
-      return Boolean(record && (record.snapshotHtml || record.richHtml || record.plainTextFallback) && record.snapshotState === "ready");
+      return Boolean(
+        record
+        && record.snapshotState === "ready"
+        && (
+          this.hasUsableArchiveText(record.plainTextFallback)
+          || this.hasStrictArchiveHtml(record.snapshotHtml)
+          || this.hasStrictArchiveHtml(record.richHtml)
+        )
+      );
+    }
+
+    invalidateDerivedArchiveState(record) {
+      if (!record) {
+        return;
+      }
+
+      record.dynamicUnits = [];
+      record.dynamicTrackHeightPx = 0;
+      record.dynamicTrackTopPx = 0;
+      record.dynamicRenderedHeight = 0;
+    }
+
+    clearRecordSourceNodes(record) {
+      if (!record) {
+        return;
+      }
+
+      record.detachedSourceNodes = [];
+      record.detachedSourceNode = null;
+    }
+
+    hasManualArchivePayload(record) {
+      return Boolean(
+        record
+        && record.snapshotState === "ready"
+        && (
+          this.hasUsableArchiveText(record.plainTextFallback)
+          || this.hasStrictArchiveHtml(record.snapshotHtml)
+          || this.hasStrictArchiveHtml(record.richHtml)
+        )
+      );
+    }
+
+    finalizeArchivedRecord(record) {
+      if (!record || !this.hasManualArchivePayload(record)) {
+        return false;
+      }
+
+      this.removeRecordLiveNodes(record);
+      record.nodes = [];
+      record.node = null;
+      record.archivePending = false;
+      record.indexState = "ready";
+      record.snapshotState = "ready";
+      this.clearRecordSourceNodes(record);
+
+      if (record.keepVisible) {
+        record.state = "visibleArchive";
+      } else {
+        record.state = "hidden";
+      }
+
+      return true;
+    }
+
+    captureBaselineSnapshot(record, sourceNode = null) {
+      if (!record) {
+        return false;
+      }
+
+      const effectiveSource = sourceNode instanceof Element
+        ? sourceNode
+        : this.buildRecordSourceRoot(record);
+
+      if (!(effectiveSource instanceof Element)) {
+        return false;
+      }
+
+      const snapshotSource = this.selectSnapshotSource(effectiveSource, record.role);
+      if (!(snapshotSource instanceof Element) || !this.hasMeaningfulSourceContent(snapshotSource)) {
+        return false;
+      }
+
+      const previousSnapshotHtml = record.snapshotHtml || "";
+      const previousPlainText = record.plainTextFallback || "";
+      const previousRichMedia = Boolean(record.hadRichMedia);
+      const snapshot = this.buildSnapshot(effectiveSource, record.role, {
+        includeRich: false
+      });
+      const nextPlainText = (snapshot.text || "").trim();
+      const nextSimpleHtml = (snapshot.simpleHtml || "").trim();
+
+      if (!this.hasUsableArchiveText(nextPlainText) && !this.hasStrictArchiveHtml(nextSimpleHtml)) {
+        return false;
+      }
+
+      if (this.hasStrictArchiveHtml(nextSimpleHtml)) {
+        record.snapshotHtml = nextSimpleHtml;
+      } else if (!record.snapshotHtml && this.hasUsableArchiveText(nextPlainText)) {
+        record.snapshotHtml = this.renderPlainTextHtml(nextPlainText);
+      }
+
+      if (this.hasUsableArchiveText(nextPlainText)) {
+        const previousNormalizedPlainText = previousPlainText.trim();
+        if (!previousNormalizedPlainText || nextPlainText.length >= previousNormalizedPlainText.length) {
+          record.plainTextFallback = nextPlainText;
+        }
+      }
+
+      record.hadRichMedia = record.hadRichMedia || snapshot.hadRichMedia;
+      record.snapshotState = "ready";
+      record.indexState = "ready";
+
+      if (
+        record.snapshotHtml !== previousSnapshotHtml
+        || record.plainTextFallback !== previousPlainText
+        || record.hadRichMedia !== previousRichMedia
+      ) {
+        this.invalidateDerivedArchiveState(record);
+      }
+
+      return this.hasManualArchivePayload(record);
     }
 
     captureSnapshot(record, sourceNode = null) {
@@ -2560,21 +3172,22 @@
       const previousPlainText = record.plainTextFallback || "";
 
       if (!(effectiveSource instanceof Element)) {
-        if (!record.snapshotHtml) {
+        if (!record.snapshotHtml && this.hasUsableArchiveText(record.plainTextFallback)) {
           record.snapshotHtml = this.renderPlainTextHtml(record.plainTextFallback);
         }
-        if (!record.plainTextFallback) {
-          record.plainTextFallback = "Archived content unavailable.";
+        if (this.hasManualArchivePayload(record)) {
+          record.snapshotState = "ready";
+          record.indexState = "ready";
         }
-        record.snapshotState = "ready";
-        if (
-          record.snapshotHtml !== previousSnapshotHtml
-          || record.richHtml !== previousRichHtml
-          || record.plainTextFallback !== previousPlainText
-        ) {
-          record.dynamicUnits = [];
-          record.dynamicTrackHeightPx = 0;
-          record.dynamicTrackTopPx = 0;
+        return;
+      }
+
+      const baselineReady = this.captureBaselineSnapshot(record, effectiveSource);
+
+      if (!baselineReady) {
+        if (!this.hasManualArchivePayload(record)) {
+          record.indexState = "failed";
+          record.snapshotState = "failed";
         }
         return;
       }
@@ -2582,24 +3195,28 @@
       const snapshot = this.buildSnapshot(effectiveSource, record.role);
       const nextPlainText = (snapshot.text || this.extractPlainText(effectiveSource) || "").trim();
       const previousNormalizedPlainText = previousPlainText.trim();
-      record.snapshotHtml = snapshot.simpleHtml || record.snapshotHtml || this.renderPlainTextHtml(snapshot.text);
-      record.richHtml = snapshot.richHtml || record.richHtml || "";
-      if (!previousNormalizedPlainText || nextPlainText.length >= previousNormalizedPlainText.length) {
+      if (this.hasStrictArchiveHtml(snapshot.simpleHtml)) {
+        record.snapshotHtml = snapshot.simpleHtml;
+      } else if (!record.snapshotHtml && this.hasUsableArchiveText(nextPlainText)) {
+        record.snapshotHtml = this.renderPlainTextHtml(nextPlainText);
+      }
+      if (this.hasStrictArchiveHtml(snapshot.richHtml)) {
+        record.richHtml = snapshot.richHtml;
+      }
+      if (this.hasUsableArchiveText(nextPlainText) && (!previousNormalizedPlainText || nextPlainText.length >= previousNormalizedPlainText.length)) {
         record.plainTextFallback = nextPlainText || record.plainTextFallback || this.extractPlainText(effectiveSource);
       }
       record.hadRichMedia = record.hadRichMedia || snapshot.hadRichMedia;
       record.estimatedHeight = record.estimatedHeight || this.measureNode(effectiveSource);
       record.snapshotState = "ready";
-      record.detachedSourceNodes = [];
-      record.detachedSourceNode = null;
+      record.indexState = "ready";
+      this.clearRecordSourceNodes(record);
       if (
         record.snapshotHtml !== previousSnapshotHtml
         || record.richHtml !== previousRichHtml
         || record.plainTextFallback !== previousPlainText
       ) {
-        record.dynamicUnits = [];
-        record.dynamicTrackHeightPx = 0;
-        record.dynamicTrackTopPx = 0;
+        this.invalidateDerivedArchiveState(record);
       }
     }
 
@@ -2629,19 +3246,35 @@
       }
     }
 
-    queuePlainTextForRecord(record) {
-      if (!record || record.plainTextFallback || record.plainTextPending) {
+    sortPendingPlainTextQueue() {
+      if (this.settings.dynamicScroll || this.pendingPlainTextIds.length < 2) {
+        return;
+      }
+
+      const indexById = new Map(this.records.map((record, index) => [record.id, index]));
+      this.pendingPlainTextIds.sort((leftId, rightId) => (
+        (indexById.get(rightId) ?? -1) - (indexById.get(leftId) ?? -1)
+      ));
+    }
+
+    queuePlainTextForRecord(record, delayMs = LIMITS.archiveIndexDelayMs) {
+      const alreadyReady = this.settings.dynamicScroll
+        ? this.hasManualArchivePayload(record)
+        : this.hasStrictReadyManualArchiveEntry(this.getManualArchiveEntry(record));
+      if (!record || alreadyReady || record.plainTextPending) {
         return;
       }
 
       record.plainTextPending = true;
+      record.indexState = "queued";
       if (!this.pendingPlainTextIds.includes(record.id)) {
         this.pendingPlainTextIds.push(record.id);
+        this.sortPendingPlainTextQueue();
       }
-      this.scheduleDeferredPlainTextWork();
+      this.scheduleDeferredPlainTextWork(delayMs);
     }
 
-    scheduleDeferredPlainTextWork() {
+    scheduleDeferredPlainTextWork(delayMs = LIMITS.archiveIndexDelayMs) {
       this.clearDeferredPlainTextTimer();
 
       if (!this.pendingPlainTextIds.length) {
@@ -2651,14 +3284,21 @@
       this.deferredPlainTextTimer = global.setTimeout(() => {
         this.deferredPlainTextTimer = 0;
         this.processDeferredPlainTextBatch();
-      }, LIMITS.deferredSnapshotDelayMs);
+      }, delayMs);
     }
 
     processDeferredPlainTextBatch() {
       const startedAt = performance.now();
       let processed = 0;
+      let indexed = 0;
+      let requeued = 0;
+      let refreshedBlocks = 0;
+      let shouldRefreshArchiveUi = false;
+      const retryRecords = [];
 
-      while (this.pendingPlainTextIds.length && processed < LIMITS.deferredSnapshotBatchSize) {
+      this.sortPendingPlainTextQueue();
+
+      while (this.pendingPlainTextIds.length && processed < LIMITS.archiveIndexBatchSize) {
         const recordId = this.pendingPlainTextIds.shift();
         const record = this.records.find((candidate) => candidate.id === recordId);
 
@@ -2667,25 +3307,123 @@
         }
 
         record.plainTextPending = false;
-
-        if (!record.plainTextFallback) {
-          record.plainTextFallback = this.extractFastPlainText(record);
-        }
-
-        if (record.state === "visibleArchive" && typeof record.refreshArchiveBlock === "function") {
-          record.refreshArchiveBlock();
-        }
-
         processed += 1;
+
+        if (!this.settings.dynamicScroll) {
+          const liveNodes = this.getRecordLiveNodes(record);
+          const entry = this.buildManualArchiveEntry(record, liveNodes);
+
+          if (this.hasStrictReadyManualArchiveEntry(entry)) {
+            const wasPendingArchive = this.isPendingManualArchiveRecord(record);
+            indexed += 1;
+            record.archivePending = false;
+            record.indexState = "ready";
+            record.snapshotState = "ready";
+            shouldRefreshArchiveUi = true;
+            if (wasPendingArchive) {
+              this.logger.info("manual-pending:ready", {
+                id: record.id,
+                role: record.role
+              });
+            }
+
+            if (entry && entry.visible && typeof entry.refreshArchiveBlock === "function") {
+              entry.refreshArchiveBlock();
+              refreshedBlocks += 1;
+            }
+            continue;
+          }
+
+          record.indexState = "queued";
+          record.snapshotState = record.snapshotState === "ready" ? "ready" : "empty";
+          record.manualPayloadState = "pending";
+          if (liveNodes.length || this.getRecordSourceNodes(record).length) {
+            if (record.archivePending) {
+              record.state = "live";
+              record.keepVisible = false;
+              if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
+                this.mountRecordNodesBefore(record, null);
+              }
+              this.applyManualPendingVisualMask(record);
+            } else {
+              this.restorePendingManualRecord(record);
+            }
+            retryRecords.push(record);
+            requeued += 1;
+          } else {
+            record.indexState = "failed";
+          }
+          continue;
+        }
+
+        if (this.hasManualArchivePayload(record)) {
+          record.indexState = "ready";
+          if (record.archivePending && this.finalizeArchivedRecord(record)) {
+            shouldRefreshArchiveUi = true;
+          } else if (record.state === "visibleArchive" && typeof record.refreshArchiveBlock === "function") {
+            record.refreshArchiveBlock();
+            refreshedBlocks += 1;
+          }
+          continue;
+        }
+
+        record.indexState = "capturing";
+        const liveNodes = this.getRecordLiveNodes(record);
+        const sourceRoot = liveNodes.length
+          ? this.buildRecordSourceRoot(record, liveNodes)
+          : this.buildRecordSourceRoot(record);
+        const indexedRecord = this.captureBaselineSnapshot(record, sourceRoot);
+
+        if (indexedRecord) {
+          indexed += 1;
+          if (record.archivePending && this.finalizeArchivedRecord(record)) {
+            shouldRefreshArchiveUi = true;
+          } else if (record.state === "visibleArchive" && typeof record.refreshArchiveBlock === "function") {
+            record.refreshArchiveBlock();
+            refreshedBlocks += 1;
+          }
+          continue;
+        }
+
+        record.indexState = "queued";
+        if (liveNodes.length || this.getRecordSourceNodes(record).length) {
+          retryRecords.push(record);
+          requeued += 1;
+        } else {
+          record.indexState = "failed";
+          record.snapshotState = record.snapshotState === "ready" ? "ready" : "failed";
+          if (record.state === "visibleArchive" && typeof record.refreshArchiveBlock === "function") {
+            record.refreshArchiveBlock();
+            refreshedBlocks += 1;
+          }
+        }
+      }
+
+      for (const record of retryRecords) {
+        this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+      }
+
+      if (!this.settings.dynamicScroll && (shouldRefreshArchiveUi || indexed > 0)) {
+        this.archiveOlderTurnsManual();
+        this.emitStatus();
+      } else if (shouldRefreshArchiveUi || (this.settings.dynamicScroll && indexed > 0)) {
+        this.hiddenCount = this.countHiddenRecords();
+        this.syncArchiveUi();
+        this.emitStatus();
+      } else if (refreshedBlocks > 0) {
+        this.emitStatus();
       }
 
       if (this.pendingPlainTextIds.length) {
-        this.scheduleDeferredPlainTextWork();
+        this.scheduleDeferredPlainTextWork(LIMITS.archiveIndexRetryDelayMs);
       }
 
-      this.logger.info("plain-text-batch", {
+      this.logger.info("archive-index-batch", {
         durationMs: this.getDurationMs(startedAt),
         processed,
+        indexed,
+        requeued,
+        refreshedBlocks,
         remaining: this.pendingPlainTextIds.length
       });
     }
@@ -2713,6 +3451,19 @@
         return;
       }
 
+      if (!this.hasManualArchivePayload(record)) {
+        this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+        this.logger.info("rich-snapshot:skip", {
+          id: record.id,
+          hasRich: Boolean(record.richHtml),
+          richRequestPending: Boolean(record.richRequestPending),
+          snapshotState: record.snapshotState || "empty",
+          viewMode: record.viewMode,
+          reason: "archive-payload-not-ready"
+        });
+        return;
+      }
+
       if (record.richHtml || record.richRequestPending) {
         this.logger.info("rich-snapshot:skip", {
           id: record.id,
@@ -2720,6 +3471,18 @@
           richRequestPending: Boolean(record.richRequestPending),
           snapshotState: record.snapshotState || "empty",
           viewMode: record.viewMode
+        });
+        return;
+      }
+
+      if (!this.getRecordSourceNodes(record).length) {
+        this.logger.info("rich-snapshot:skip", {
+          id: record.id,
+          hasRich: Boolean(record.richHtml),
+          richRequestPending: Boolean(record.richRequestPending),
+          snapshotState: record.snapshotState || "empty",
+          viewMode: record.viewMode,
+          reason: "no-source-nodes"
         });
         return;
       }
@@ -2767,7 +3530,10 @@
 
         record.richRequestPending = false;
 
-        if (record.richHtml || !this.getRecordSourceNodes(record).length) {
+        if (record.richHtml || !this.getRecordSourceNodes(record).length || !this.hasManualArchivePayload(record)) {
+          if (!this.hasManualArchivePayload(record)) {
+            this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+          }
           this.logger.info("rich-snapshot:skip-batch-record", {
             id: record.id,
             hasRich: Boolean(record.richHtml),
@@ -2829,20 +3595,69 @@
       });
     }
 
-    buildSnapshot(turnNode, role) {
+    buildSnapshot(turnNode, role, options = {}) {
+      const includeRich = options.includeRich !== false;
       const source = this.selectSnapshotSource(turnNode, role);
-      const richSource = this.selectRichSnapshotSource(turnNode, role);
       const context = { hadRichMedia: false };
-      const simpleHtml = this.serializeSnapshotNode(source, context).trim();
-      const richHtml = this.buildRichSnapshot(richSource, context).trim();
+      const simpleHtmlCandidate = this.serializeSnapshotNode(source, context).trim();
       const text = this.extractPlainText(source);
+      const simpleHtml = this.hasStrictArchiveHtml(simpleHtmlCandidate)
+        ? simpleHtmlCandidate
+        : (this.hasUsableArchiveText(text) ? this.renderPlainTextHtml(text) : "");
+      const richHtml = includeRich
+        ? this.buildValidatedRichSnapshot(turnNode, role, context)
+        : "";
 
       return {
-        simpleHtml: simpleHtml || this.renderPlainTextHtml(text),
+        simpleHtml,
         richHtml,
         text,
         hadRichMedia: context.hadRichMedia
       };
+    }
+
+    buildValidatedRichSnapshot(turnNode, role, context) {
+      const candidates = this.collectSnapshotSourceCandidates(turnNode, role, "rich");
+      const rejectionSamples = [];
+
+      for (const candidate of candidates) {
+        const candidateContext = { hadRichMedia: false };
+        const richHtml = this.buildRichSnapshot(candidate, candidateContext).trim();
+
+        if (!richHtml) {
+          rejectionSamples.push({
+            candidate: this.describeElement(candidate),
+            reason: "empty-after-sanitize"
+          });
+          continue;
+        }
+
+        if (!this.hasMeaningfulArchiveHtml(richHtml)) {
+          rejectionSamples.push({
+            candidate: this.describeElement(candidate),
+            reason: "no-meaningful-content",
+            htmlLength: richHtml.length
+          });
+          continue;
+        }
+
+        context.hadRichMedia = context.hadRichMedia || candidateContext.hadRichMedia;
+        this.logger.info("rich-snapshot-source:selected", {
+          role,
+          candidate: this.describeElement(candidate),
+          htmlLength: richHtml.length,
+          hadRichMedia: candidateContext.hadRichMedia,
+          rejectedCandidates: rejectionSamples.slice(0, 3)
+        });
+        return richHtml;
+      }
+
+      this.logger.info("rich-snapshot-source:failed", {
+        role,
+        candidateCount: candidates.length,
+        rejectedCandidates: rejectionSamples.slice(0, 5)
+      });
+      return "";
     }
 
     buildRichSnapshot(source, context) {
@@ -2863,8 +3678,9 @@
       }
 
       this.replaceScrollableTablesInElement(clone);
+      this.pruneRichCloneLayout(clone);
 
-      if (!(clone instanceof HTMLElement) || !clone.innerHTML.trim()) {
+      if (!(clone instanceof HTMLElement) || !clone.innerHTML.trim() || !this.hasMeaningfulRenderedContent(clone)) {
         return "";
       }
 
@@ -3231,7 +4047,29 @@
           continue;
         }
 
-        element.removeAttribute("id");
+        for (const attribute of Array.from(element.attributes)) {
+          const name = attribute.name.toLowerCase();
+          const keepLinkAttribute = tagName === "a" && ["href", "target", "rel"].includes(name);
+          const keepTableSpanAttribute = ["colspan", "rowspan"].includes(name);
+
+          if (keepLinkAttribute || keepTableSpanAttribute) {
+            continue;
+          }
+
+          if (
+            name === "id"
+            || name === "class"
+            || name === "style"
+            || name === "role"
+            || name === "tabindex"
+            || name === "contenteditable"
+            || name === "data-testid"
+            || name.startsWith("data-")
+            || name.startsWith("aria-")
+          ) {
+            element.removeAttribute(attribute.name);
+          }
+        }
 
         if (tagName === "a") {
           const href = this.sanitizeHref(element.getAttribute("href"));
@@ -3246,14 +4084,154 @@
       }
     }
 
-    selectSnapshotSource(turnNode, role) {
-      const selectors = role === "assistant"
-        ? [".markdown-new-styling", ".markdown.prose", ".agent-turn", "[data-message-author-role='assistant']"]
-        : ["[data-message-author-role='user']", ".whitespace-pre-wrap", "[dir='auto']"];
+    pruneRichCloneLayout(root) {
+      if (!(root instanceof Element)) {
+        return;
+      }
+
+      const transparentTags = new Set(["div", "span", "section", "article"]);
+      const elements = Array.from(root.querySelectorAll("*")).reverse();
+
+      for (const element of elements) {
+        if (!(element instanceof HTMLElement)) {
+          continue;
+        }
+
+        const tagName = element.tagName.toLowerCase();
+        if (!transparentTags.has(tagName)) {
+          continue;
+        }
+
+        const ownText = Array.from(element.childNodes).some((node) => (
+          node.nodeType === Node.TEXT_NODE
+          && Boolean((node.textContent || "").trim())
+        ));
+        const hasAttributes = element.attributes.length > 0;
+
+        if (!ownText && !element.childElementCount) {
+          element.remove();
+          continue;
+        }
+
+        if (!ownText && element.childElementCount === 1 && !hasAttributes) {
+          const fragment = element.ownerDocument.createDocumentFragment();
+          while (element.firstChild) {
+            fragment.appendChild(element.firstChild);
+          }
+          element.replaceWith(fragment);
+        }
+      }
+    }
+
+    describeElement(node) {
+      if (!(node instanceof Element)) {
+        return "<non-element>";
+      }
+
+      const parts = [node.tagName.toLowerCase()];
+      if (node.id) {
+        parts.push(`#${node.id}`);
+      }
+
+      const testId = node.getAttribute("data-testid");
+      if (testId) {
+        parts.push(`[data-testid="${testId}"]`);
+      }
+
+      const turnRole = node.getAttribute("data-turn");
+      if (turnRole) {
+        parts.push(`[data-turn="${turnRole}"]`);
+      }
+
+      const role = node.getAttribute("role");
+      if (role) {
+        parts.push(`[role="${role}"]`);
+      }
+
+      const classList = Array.from(node.classList || []).slice(0, 3);
+      if (classList.length) {
+        parts.push(`.${classList.join(".")}`);
+      }
+
+      return parts.join("");
+    }
+
+    getSnapshotSourceSelectors(role, mode = "simple") {
+      void mode;
+
+      if (role === "assistant") {
+        return [
+          ".markdown-new-styling",
+          ".markdown.prose",
+          "[data-message-author-role='assistant'] [dir='auto']",
+          ".agent-turn [dir='auto']",
+          "[data-message-author-role='assistant']",
+          ".agent-turn",
+          "[dir='auto']"
+        ];
+      }
+
+      return [
+        ".whitespace-pre-wrap",
+        "[data-message-author-role='user'] [dir='auto']",
+        "[dir='auto']",
+        "[data-message-author-role='user']"
+      ];
+    }
+
+    collectSnapshotSourceCandidates(turnNode, role, mode = "simple") {
+      const selectors = this.getSnapshotSourceSelectors(role, mode);
+      const candidates = [];
+      const seen = new Set();
+
+      const pushCandidate = (candidate) => {
+        if (!(candidate instanceof Element)) {
+          return;
+        }
+
+        if (candidate !== turnNode && !turnNode.contains(candidate)) {
+          return;
+        }
+
+        if (seen.has(candidate)) {
+          return;
+        }
+
+        seen.add(candidate);
+        candidates.push(candidate);
+      };
 
       for (const selector of selectors) {
-        const candidate = turnNode.querySelector(selector);
-        if (candidate && this.extractPlainText(candidate)) {
+        if (turnNode.matches(selector)) {
+          pushCandidate(turnNode);
+        }
+
+        for (const candidate of turnNode.querySelectorAll(selector)) {
+          pushCandidate(candidate);
+        }
+      }
+
+      pushCandidate(turnNode);
+      return candidates;
+    }
+
+    hasMeaningfulSourceContent(source) {
+      if (!(source instanceof Element)) {
+        return false;
+      }
+
+      if (this.extractPlainText(source).trim()) {
+        return true;
+      }
+
+      return Boolean(
+        source.querySelector("pre, table, math, .katex, .katex-display, mjx-container, .MathJax, img, picture, canvas, svg, video, audio, iframe, object, embed, hr")
+      );
+    }
+
+    selectSnapshotSource(turnNode, role) {
+      for (const candidate of this.collectSnapshotSourceCandidates(turnNode, role, "simple")) {
+        if (this.hasMeaningfulSourceContent(candidate)) {
           return candidate;
         }
       }
@@ -3262,18 +4240,69 @@
     }
 
     selectRichSnapshotSource(turnNode, role) {
-      const selectors = role === "assistant"
-        ? [".agent-turn", ".markdown-new-styling", ".markdown.prose", "[data-message-author-role='assistant']"]
-        : ["[data-message-author-role='user']", "[dir='auto']", ".whitespace-pre-wrap"];
+      return this.collectSnapshotSourceCandidates(turnNode, role, "rich")[0] || this.selectSnapshotSource(turnNode, role);
+    }
 
-      for (const selector of selectors) {
-        const candidate = turnNode.querySelector(selector);
-        if (candidate instanceof Element && candidate.innerHTML.trim()) {
-          return candidate;
+    getMeaningfulRenderedText(root) {
+      if (!(root instanceof Element)) {
+        return "";
+      }
+
+      const clone = root.cloneNode(true);
+      const removalSelectors = [
+        "[data-rapid-view-for-chatgpt-code-header]",
+        "[data-rapid-view-for-chatgpt-copy-code]",
+        "button",
+        "textarea",
+        "input",
+        "select",
+        "option",
+        "form",
+        "label",
+        "script",
+        "style",
+        "noscript"
+      ];
+
+      for (const selector of removalSelectors) {
+        for (const node of clone.querySelectorAll(selector)) {
+          node.remove();
         }
       }
 
-      return this.selectSnapshotSource(turnNode, role);
+      return (clone.textContent || "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    hasMeaningfulRenderedContent(root) {
+      if (!(root instanceof Element)) {
+        return false;
+      }
+
+      if (this.getMeaningfulRenderedText(root)) {
+        return true;
+      }
+
+      return Boolean(
+        root.querySelector("pre, table, [data-rapid-view-for-chatgpt-code-block], [data-rapid-view-for-chatgpt-latex], [data-rapid-view-for-chatgpt-rich-placeholder], img, picture, canvas, svg, video, audio, iframe, object, embed, hr")
+      );
+    }
+
+    hasMeaningfulArchiveHtml(html) {
+      if (!html || !html.trim()) {
+        return false;
+      }
+
+      if (this.isArchiveFallbackHtml(html)) {
+        return false;
+      }
+
+      const container = document.createElement("div");
+      container.innerHTML = html.trim();
+      return this.hasMeaningfulRenderedContent(container);
     }
 
     serializeSnapshotNode(node, context) {
@@ -4118,9 +5147,10 @@
 
       this.hiddenCount = this.countHiddenRecords();
       this.dynamicVisibleCount = 0;
-      const visibleArchiveRecords = this.records.filter((record) => record.state === "visibleArchive");
+      const visibleArchiveRecords = this.getVisibleManualArchiveEntries();
+      const pendingManualArchiveCount = this.countPendingManualArchiveRecords();
 
-      if (!this.hiddenCount && !visibleArchiveRecords.length) {
+      if (!this.hiddenCount && !visibleArchiveRecords.length && !pendingManualArchiveCount) {
         this.removeArchiveUi();
         return;
       }
@@ -4142,30 +5172,17 @@
       this.mountArchiveUiHost(archiveUi);
 
       for (const record of renderState.records) {
-        if (record.viewMode === "simple" && !record.plainTextFallback) {
-          this.queuePlainTextForRecord(record);
-        }
-
-        if (record.viewMode === "rich" && !record.richHtml) {
-          this.requestRichSnapshot(record);
-        }
-      }
-
-      for (const record of renderState.records) {
         if (record.archiveBlock instanceof HTMLElement && record.archiveBlock.isConnected) {
           record.estimatedHeight = Math.max(record.estimatedHeight || 0, this.measureNode(record.archiveBlock));
         }
-      }
-
-      if (renderState.records.some((record) => record.snapshotState === "pending")) {
-        this.scheduleDeferredSnapshotWork();
       }
 
       this.logger.info("sync-archive-ui", {
         durationMs: this.getDurationMs(startedAt),
         visibleArchiveCount: visibleArchiveRecords.length,
         renderedArchiveCount: renderState.records.length,
-        hiddenCount: this.hiddenCount
+        hiddenCount: this.hiddenCount,
+        pendingManualArchiveCount
       });
     }
 
@@ -4693,22 +5710,16 @@
         return;
       }
 
-      const sourceNode = this.buildRecordSourceRoot(record);
-
-      if ((!record.snapshotHtml && !record.richHtml) && sourceNode) {
-        this.captureSnapshot(record, sourceNode);
-      }
-
-      if (!record.plainTextFallback && sourceNode) {
-        record.plainTextFallback = this.extractPlainText(sourceNode);
+      if (!this.hasManualArchivePayload(record)) {
+        this.queuePlainTextForRecord(record);
       }
 
       if (!record.snapshotHtml && record.plainTextFallback) {
         record.snapshotHtml = this.renderPlainTextHtml(record.plainTextFallback);
       }
 
-      if (!record.snapshotState) {
-        record.snapshotState = (record.snapshotHtml || record.richHtml || record.plainTextFallback) ? "ready" : "empty";
+      if (!record.snapshotState || record.snapshotState === "empty") {
+        record.snapshotState = this.hasManualArchivePayload(record) ? "ready" : (record.indexState || "empty");
       }
     }
 
@@ -4845,8 +5856,12 @@
         return;
       }
 
-      if (record.snapshotState !== "ready") {
-        this.captureSnapshot(record);
+      if (!this.hasManualArchivePayload(record)) {
+        this.ensureDynamicRenderableRecord(record);
+      }
+
+      if (!this.hasManualArchivePayload(record)) {
+        return;
       }
 
       const fragments = this.buildDynamicFragments(record);
@@ -5469,6 +6484,7 @@
       if (this.settings.dynamicScroll) {
         archiveUi.restoreBar.style.display = "block";
         archiveUi.restoreBar.style.padding = "14px 16px";
+        archiveUi.list.style.display = "flex";
         archiveUi.archiveActionRow.style.display = "none";
         archiveUi.counter.style.display = "none";
         archiveUi.counter.textContent = "";
@@ -5491,7 +6507,8 @@
 
       archiveUi.restoreBar.style.display = "flex";
       archiveUi.restoreBar.style.padding = "12px 16px";
-      archiveUi.archiveActionRow.style.display = "flex";
+      archiveUi.list.style.display = archiveCount > 0 ? "flex" : "none";
+      archiveUi.archiveActionRow.style.display = archiveCount > 0 ? "flex" : "none";
       archiveUi.counter.style.display = "block";
       archiveUi.timeline.style.display = "none";
       archiveUi.timelineTrack.replaceChildren();
@@ -5499,19 +6516,23 @@
       archiveUi.timelineTooltip.textContent = "";
       archiveUi.actions.style.display = "flex";
 
-      const batchSize = Math.min(this.hiddenCount, this.settings.restoreBatchSize);
-      const canRestoreMore = this.hiddenCount > 0;
+      const readyHiddenCount = this.countHiddenRecords();
+      const pendingManualCount = this.countPendingManualArchiveRecords();
+      const batchSize = Math.min(readyHiddenCount, this.settings.restoreBatchSize);
+      const canRestoreMore = readyHiddenCount > 0;
 
       archiveUi.counter.textContent = canRestoreMore
-        ? `${this.hiddenCount} older messages archived for speed`
-        : "All archived messages loaded";
+        ? `${readyHiddenCount} older messages archived for speed`
+        : (pendingManualCount > 0 ? "Indexing older messages..." : "All archived messages loaded");
       archiveUi.loadMoreButton.textContent = `Load ${Math.max(1, batchSize)} older`;
       archiveUi.loadMoreButton.hidden = !canRestoreMore;
       archiveUi.loadMoreButton.disabled = !canRestoreMore;
     }
 
     mountArchiveUiHost(archiveUi) {
-      const firstLiveNode = this.getFirstLiveNode();
+      const firstLiveNode = this.settings.dynamicScroll
+        ? this.getFirstLiveNode()
+        : this.getManualArchiveInsertionNode();
       this.withDomMutationGuard(() => {
         if (firstLiveNode) {
           this.root.insertBefore(archiveUi.host, firstLiveNode);
@@ -5537,11 +6558,14 @@
 
       for (const record of recordsToInsert) {
         const recordStartedAt = performance.now();
+        const isManualEntry = this.isManualArchiveEntry(record);
         this.logger.info("archive-block:create:start", {
           id: record.id,
           role: record.role,
-          hasPlainText: Boolean(record.plainTextFallback),
-          hasRich: Boolean(record.richHtml),
+          hasPlainText: isManualEntry ? this.hasUsableArchiveText(record.simpleText) : this.hasUsableArchiveText(record.plainTextFallback),
+          hasRich: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : this.hasStrictArchiveHtml(record.richHtml),
+          hasManualSimpleHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : undefined,
+          hasManualRenderedHtml: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : undefined,
           viewMode: record.viewMode
         });
         fragment.appendChild(this.createArchiveBlock(record));
@@ -5582,6 +6606,8 @@
         record.refreshArchiveBlock();
         return record.archiveBlock;
       }
+
+      const isManualEntry = this.isManualArchiveEntry(record);
 
       const article = document.createElement("article");
       const header = document.createElement("div");
@@ -5723,23 +6749,37 @@
           : "1px solid rgba(126, 139, 166, 0.20)";
 
         if (
-          record.viewMode === "rich"
+          !isManualEntry
+          && this.settings.dynamicScroll
+          && record.viewMode === "rich"
           && !record.richHtml
           && !record.richRequestPending
-          && record.snapshotState !== "ready"
+          && this.hasManualArchivePayload(record)
+          && this.getRecordSourceNodes(record).length
         ) {
           this.requestRichSnapshot(record);
         }
 
+        const manualRenderedReady = isManualEntry && this.hasStrictArchiveHtml(record.renderedHtml);
+        if (isManualEntry && record.viewMode === "rich" && !manualRenderedReady) {
+          record.viewMode = "simple";
+        }
+
         let renderedSource = "simple";
-        if (record.viewMode === "rich" && record.richHtml) {
+        if (isManualEntry && record.viewMode === "rich" && manualRenderedReady) {
+          renderedSource = "manualRenderedHtml";
+        } else if (isManualEntry) {
+          renderedSource = "manualSimple";
+        } else if (record.viewMode === "rich" && record.richHtml) {
           renderedSource = "richHtml";
         } else if (record.viewMode === "rich" && record.snapshotState === "ready" && record.snapshotHtml) {
           renderedSource = "snapshotHtml";
         } else if (record.viewMode === "rich" && record.richRequestPending) {
           renderedSource = "pending";
+        } else if (record.viewMode === "rich" && !isManualEntry && !this.hasManualArchivePayload(record)) {
+          renderedSource = "indexing";
         } else if (record.viewMode === "rich") {
-          renderedSource = "richFallbackMessage";
+          renderedSource = "snapshotFallbackMessage";
         }
 
         body.innerHTML = this.getArchiveBodyHtml(record);
@@ -5749,10 +6789,12 @@
           id: record.id,
           viewMode: record.viewMode,
           renderedSource,
-          hasRich: Boolean(record.richHtml),
-          richRequestPending: Boolean(record.richRequestPending),
-          snapshotState: record.snapshotState || "empty",
-          hasSnapshotHtml: Boolean(record.snapshotHtml),
+          hasRich: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : this.hasStrictArchiveHtml(record.richHtml),
+          hasManualSimpleHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : undefined,
+          hasManualRenderedHtml: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : undefined,
+          richRequestPending: isManualEntry ? false : Boolean(record.richRequestPending),
+          snapshotState: isManualEntry ? "manual-ready" : (record.snapshotState || "empty"),
+          hasSnapshotHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : this.hasStrictArchiveHtml(record.snapshotHtml),
           bodyTextPreview: (body.textContent || "").trim().slice(0, 120)
         });
 
@@ -5764,23 +6806,28 @@
         header.style.paddingRight = this.settings.dynamicScroll ? "0" : "28px";
 
         simpleButton.disabled = record.viewMode === "simple";
-        richButton.disabled = record.viewMode === "rich" && Boolean(record.richHtml);
+        const hasRenderedView = isManualEntry
+          ? manualRenderedReady
+          : this.hasStrictArchiveHtml(record.richHtml);
+        richButton.disabled = isManualEntry
+          ? (!manualRenderedReady || record.viewMode === "rich")
+          : (record.viewMode === "rich" && hasRenderedView);
         simpleButton.style.opacity = simpleButton.disabled ? "1" : "0.72";
-        richButton.style.opacity = (record.viewMode === "rich" || record.richRequestPending) ? "1" : "0.72";
+        richButton.style.opacity = (record.viewMode === "rich" || (!isManualEntry && record.richRequestPending)) ? "1" : "0.72";
         simpleButton.style.background = simpleButton.disabled
           ? "linear-gradient(180deg, rgba(112, 151, 222, 0.30), rgba(85, 120, 188, 0.24))"
           : "linear-gradient(180deg, rgba(245, 248, 252, 0.96), rgba(224, 232, 243, 0.96))";
-        richButton.style.background = (record.viewMode === "rich" || record.richRequestPending)
+        richButton.style.background = (record.viewMode === "rich" || (!isManualEntry && record.richRequestPending))
           ? "linear-gradient(180deg, rgba(112, 151, 222, 0.30), rgba(85, 120, 188, 0.24))"
           : "linear-gradient(180deg, rgba(245, 248, 252, 0.96), rgba(224, 232, 243, 0.96))";
         simpleButton.style.border = simpleButton.disabled
           ? "1px solid rgba(77, 114, 180, 0.24)"
           : "1px solid rgba(112, 130, 164, 0.20)";
-        richButton.style.border = (record.viewMode === "rich" || record.richRequestPending)
+        richButton.style.border = (record.viewMode === "rich" || (!isManualEntry && record.richRequestPending))
           ? "1px solid rgba(77, 114, 180, 0.24)"
           : "1px solid rgba(112, 130, 164, 0.20)";
         simpleButton.style.color = simpleButton.disabled ? "#2e4a72" : "#445c7e";
-        richButton.style.color = (record.viewMode === "rich" || record.richRequestPending) ? "#2e4a72" : "#445c7e";
+        richButton.style.color = (record.viewMode === "rich" || (!isManualEntry && record.richRequestPending)) ? "#2e4a72" : "#445c7e";
       };
 
       simpleButton.addEventListener("click", () => {
@@ -5807,16 +6854,21 @@
         if (this.dynamicScrollTargetId === record.id) {
           this.dynamicScrollTargetId = "";
         }
+        if (isManualEntry && !this.hasStrictArchiveHtml(record.renderedHtml)) {
+          return;
+        }
         record.viewMode = "rich";
-        if (!record.richHtml) {
+        if (!isManualEntry && !record.richHtml) {
           this.requestRichSnapshot(record);
         }
         this.logger.info("archive-block:rendered-click", {
           id: record.id,
-          hasRich: Boolean(record.richHtml),
-          richRequestPending: Boolean(record.richRequestPending),
-          snapshotState: record.snapshotState || "empty",
-          hasSnapshotHtml: Boolean(record.snapshotHtml)
+          hasRich: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : this.hasStrictArchiveHtml(record.richHtml),
+          hasManualSimpleHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : undefined,
+          hasManualRenderedHtml: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : undefined,
+          richRequestPending: isManualEntry ? false : Boolean(record.richRequestPending),
+          snapshotState: isManualEntry ? "manual-ready" : (record.snapshotState || "empty"),
+          hasSnapshotHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : this.hasStrictArchiveHtml(record.snapshotHtml)
         });
         updateView();
       });
@@ -5838,25 +6890,71 @@
     }
 
     getArchiveBodyHtml(record) {
-      if (record.viewMode === "rich" && record.richHtml) {
+      const isManualEntry = this.isManualArchiveEntry(record);
+
+      if (isManualEntry) {
+        if (record.viewMode === "rich") {
+          if (this.hasStrictArchiveHtml(record.renderedHtml)) {
+            return record.renderedHtml;
+          }
+
+          return "";
+        }
+
+        if (this.hasUsableArchiveText(record.simpleText)) {
+          const preview = this.getSimplePreviewText({
+            plainTextFallback: record.simpleText,
+            simpleExpanded: record.simpleExpanded
+          });
+          return this.renderFastPreviewHtml(preview.text);
+        }
+
+        if (this.hasStrictArchiveHtml(record.simpleHtml)) {
+          return record.simpleHtml;
+        }
+
+        return this.hasStrictArchiveHtml(record.renderedHtml)
+          ? record.renderedHtml
+          : "";
+      }
+
+      if (record.viewMode === "rich" && this.hasStrictArchiveHtml(record.richHtml)) {
         return record.richHtml;
       }
 
       if (record.viewMode === "rich") {
-        if (record.snapshotState === "ready" && record.snapshotHtml) {
+        if (record.snapshotState === "ready" && this.hasStrictArchiveHtml(record.snapshotHtml)) {
           return record.snapshotHtml;
         }
 
-        if (record.richRequestPending) {
+        if (!isManualEntry && (record.richRequestPending || record.plainTextPending || record.indexState === "queued" || record.indexState === "capturing")) {
           return "<p>Preparing rendered archived message...</p>";
         }
 
-        return "<p>Rendered view is unavailable for this archived message. Showing fallback content instead.</p>";
+        if (record.snapshotState === "failed" || record.indexState === "failed") {
+          return "<p>Archived content unavailable.</p>";
+        }
+
+        return this.hasUsableArchiveText(record.plainTextFallback)
+          ? this.renderPlainTextHtml(record.plainTextFallback)
+          : "<p>Archived content unavailable.</p>";
       }
 
-      if (record.plainTextFallback) {
+      if (this.hasUsableArchiveText(record.plainTextFallback)) {
         const preview = this.getSimplePreviewText(record);
         return this.renderFastPreviewHtml(preview.text);
+      }
+
+      if (record.snapshotState === "ready" && this.hasStrictArchiveHtml(record.snapshotHtml)) {
+        return record.snapshotHtml;
+      }
+
+      if (record.snapshotState === "failed" || record.indexState === "failed") {
+        return "<p>Archived content unavailable.</p>";
+      }
+
+      if (isManualEntry && this.hasStrictArchiveHtml(record.snapshotHtml)) {
+        return record.snapshotHtml;
       }
 
       return "<p>Preparing archived message...</p>";
@@ -6546,16 +7644,61 @@
       return null;
     }
 
+    getManualArchiveInsertionNode() {
+      const liveTurnCount = Math.min(this.records.length, this.getManualLiveTurnCount());
+      const firstLiveIndex = Math.max(0, this.records.length - liveTurnCount);
+
+      for (let index = firstLiveIndex; index < this.records.length; index += 1) {
+        const record = this.records[index];
+        if (record && record.state === "live") {
+          const liveNode = this.getRecordPrimaryLiveNode(record);
+          if (liveNode) {
+            return liveNode;
+          }
+        }
+      }
+
+      return this.getFirstLiveNode();
+    }
+
     showEntireHistory() {
       this.resetDynamicScrollTracking(false);
 
       for (const record of this.records) {
-        if (record.state !== "live") {
+        this.restorePendingManualRecord(record);
+      }
+
+      if (this.settings.dynamicScroll) {
+        for (const record of this.records) {
+          if (record.state !== "live") {
+            record.state = "visibleArchive";
+            record.keepVisible = false;
+            record.simpleExpanded = false;
+            record.dynamicAutoExpanded = false;
+            record.viewMode = this.getDefaultArchiveViewMode();
+          }
+        }
+        this.hiddenCount = 0;
+        this.syncArchiveUi();
+        return;
+      }
+
+      for (const record of this.records) {
+        const entry = this.getManualArchiveEntry(record);
+        if (this.hasStrictReadyManualArchiveEntry(entry)) {
+          entry.visible = true;
+          entry.viewMode = entry.viewMode || this.getDefaultArchiveViewMode();
           record.state = "visibleArchive";
           record.keepVisible = false;
-          record.simpleExpanded = false;
-          record.dynamicAutoExpanded = false;
-          record.viewMode = this.getDefaultArchiveViewMode();
+          record.archivePending = false;
+          continue;
+        }
+
+        record.state = "live";
+        record.keepVisible = false;
+        record.archivePending = false;
+        if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
+          this.mountRecordNodesBefore(record, null);
         }
       }
 
@@ -6564,20 +7707,66 @@
     }
 
     prepareDefaultLoadMoreState() {
-      const liveTurnCount = Math.min(this.records.length, this.settings.liveTurnCount);
+      if (this.settings.dynamicScroll) {
+        const liveTurnCount = Math.min(this.records.length, this.settings.liveTurnCount);
+        const firstLiveIndex = Math.max(0, this.records.length - liveTurnCount);
+        const defaultViewMode = this.getDefaultArchiveViewMode();
+
+        for (let index = 0; index < this.records.length; index += 1) {
+          const record = this.records[index];
+          this.restorePendingManualRecord(record);
+          record.keepVisible = false;
+          record.simpleExpanded = false;
+          record.dynamicAutoExpanded = false;
+
+          if (index < firstLiveIndex && this.hasManualArchivePayload(record)) {
+            record.state = "hidden";
+            record.archivePending = false;
+            record.viewMode = defaultViewMode;
+          } else {
+            record.state = "live";
+            record.archivePending = index < firstLiveIndex;
+            if (record.archivePending) {
+              this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+            }
+          }
+        }
+        return;
+      }
+
+      const liveTurnCount = Math.min(this.records.length, this.getManualLiveTurnCount());
       const firstLiveIndex = Math.max(0, this.records.length - liveTurnCount);
       const defaultViewMode = this.getDefaultArchiveViewMode();
 
       for (let index = 0; index < this.records.length; index += 1) {
         const record = this.records[index];
+        const entry = this.getManualArchiveEntry(record);
         record.keepVisible = false;
-        record.simpleExpanded = false;
-        record.dynamicAutoExpanded = false;
 
-        if (index < firstLiveIndex) {
+        if (this.isRestorableManualEntry(entry) && index < firstLiveIndex) {
+          this.restorePendingManualRecord(record);
+          entry.visible = false;
+          entry.viewMode = defaultViewMode;
+          entry.simpleExpanded = false;
+          entry.dynamicAutoExpanded = false;
           record.state = "hidden";
-          record.viewMode = defaultViewMode;
+          record.archivePending = false;
+        } else if (index < firstLiveIndex) {
+          record.archivePending = true;
+          record.state = "live";
+          record.indexState = record.indexState === "ready" ? "ready" : "queued";
+          record.manualPayloadState = record.manualPayloadState === "ready" ? "ready" : "pending";
+          this.queuePlainTextForRecord(record, LIMITS.archiveIndexRetryDelayMs);
+          if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
+            this.mountRecordNodesBefore(record, null);
+          }
+          this.applyManualPendingVisualMask(record);
         } else {
+          record.archivePending = false;
+          if (record.nodes.some((node) => node instanceof HTMLElement && node.parentElement !== this.root)) {
+            this.mountRecordNodesBefore(record, null);
+          }
+          this.restorePendingManualRecord(record);
           record.state = "live";
         }
       }
@@ -6629,11 +7818,17 @@
       }
 
       const startedAt = performance.now();
-      const restoreCount = Math.min(this.hiddenCount, Math.max(1, batchSize));
+      const hiddenRecords = this.records.filter((record) => (
+        record.state === "hidden"
+        && this.isRestorableManualEntry(this.getManualArchiveEntry(record))
+      ));
+      const restoreCount = Math.min(hiddenRecords.length, Math.max(1, batchSize));
+      if (!restoreCount) {
+        return;
+      }
       const scrollAnchor = this.getRestoreScrollAnchor();
       const beforeTop = scrollAnchor ? scrollAnchor.getBoundingClientRect().top : 0;
       const previousHiddenCount = this.hiddenCount;
-      const nextHiddenCount = this.hiddenCount - restoreCount;
       const newlyVisibleRecords = [];
 
       this.logger.info("restore-older:start", {
@@ -6642,25 +7837,28 @@
         previousVisibleArchiveCount: this.countVisibleArchiveRecords()
       });
 
-      for (let index = nextHiddenCount; index < previousHiddenCount; index += 1) {
-        if (this.records[index]) {
-          this.records[index].state = "visibleArchive";
-          this.records[index].keepVisible = true;
-          this.records[index].simpleExpanded = false;
-          this.records[index].dynamicAutoExpanded = false;
-          this.records[index].viewMode = this.getDefaultArchiveViewMode();
-          newlyVisibleRecords.push(this.records[index]);
+      const recordsToRestore = hiddenRecords.slice(-restoreCount);
 
-          if (this.records[index].viewMode === "simple") {
-            this.queuePlainTextForRecord(this.records[index]);
-          } else {
-            this.requestRichSnapshot(this.records[index]);
-          }
+      for (const record of recordsToRestore) {
+        const entry = this.getManualArchiveEntry(record);
+
+        if (record && this.hasStrictReadyManualArchiveEntry(entry)) {
+          entry.visible = true;
+          entry.simpleExpanded = false;
+          entry.dynamicAutoExpanded = false;
+          entry.viewMode = entry.viewMode || this.getDefaultArchiveViewMode();
+          record.state = "visibleArchive";
+          record.keepVisible = true;
+          newlyVisibleRecords.push(entry);
         }
       }
 
-      this.hiddenCount = nextHiddenCount;
-      this.insertVisibleArchiveRecords(newlyVisibleRecords);
+      this.hiddenCount = this.countHiddenRecords();
+      if (newlyVisibleRecords.length) {
+        this.insertVisibleArchiveRecords(newlyVisibleRecords);
+      } else {
+        this.syncArchiveUi();
+      }
 
       if (scrollAnchor) {
         const afterTop = scrollAnchor.getBoundingClientRect().top;
@@ -6697,7 +7895,7 @@
         }
       }
 
-      return this.getFirstLiveNode();
+      return this.settings.dynamicScroll ? this.getFirstLiveNode() : this.getManualArchiveInsertionNode();
     }
 
     collapseVisibleArchived() {
@@ -6710,11 +7908,15 @@
       }
 
       this.resetDynamicScrollTracking(false);
-      const firstLiveNode = this.getFirstLiveNode();
+      const firstLiveNode = this.getManualArchiveInsertionNode();
       const beforeTop = firstLiveNode ? firstLiveNode.getBoundingClientRect().top : 0;
 
       for (const record of this.records) {
         if (record.state === "visibleArchive") {
+          const entry = this.getManualArchiveEntry(record);
+          if (entry) {
+            entry.visible = false;
+          }
           record.state = "hidden";
           record.keepVisible = false;
         }
@@ -6746,13 +7948,17 @@
         return;
       }
 
-      const firstLiveNode = this.getFirstLiveNode();
+      const firstLiveNode = this.getManualArchiveInsertionNode();
       const beforeTop = firstLiveNode ? firstLiveNode.getBoundingClientRect().top : 0;
       let changed = false;
 
       for (let index = 0; index <= targetIndex; index += 1) {
         const record = this.records[index];
         if (record && record.state === "visibleArchive") {
+          const entry = this.getManualArchiveEntry(record);
+          if (entry) {
+            entry.visible = false;
+          }
           record.state = "hidden";
           record.keepVisible = false;
           changed = true;
@@ -6784,17 +7990,19 @@
       }
 
       this.resetDynamicScrollTracking(false);
-      const firstLiveNode = this.getFirstLiveNode();
+      const firstLiveNode = this.getManualArchiveInsertionNode();
       const beforeTop = firstLiveNode ? firstLiveNode.getBoundingClientRect().top : 0;
       const nextViewMode = this.getDefaultArchiveViewMode();
 
       for (const record of this.records) {
-        if (record.state !== "live") {
+        const entry = this.getManualArchiveEntry(record);
+        if (this.hasStrictReadyManualArchiveEntry(entry)) {
+          entry.visible = true;
+          entry.simpleExpanded = false;
+          entry.dynamicAutoExpanded = false;
+          entry.viewMode = nextViewMode;
           record.state = "visibleArchive";
           record.keepVisible = true;
-          record.simpleExpanded = false;
-          record.dynamicAutoExpanded = false;
-          record.viewMode = nextViewMode;
         }
       }
 
@@ -6826,20 +8034,24 @@
 
       for (const record of this.records) {
         if (record.state === "visibleArchive") {
-          record.dynamicAutoExpanded = false;
+          const entry = this.getManualArchiveEntry(record);
+          if (!this.isVisibleManualArchiveEntry(entry)) {
+            continue;
+          }
 
-          if (record.viewMode !== nextMode) {
-            record.viewMode = nextMode;
+          entry.dynamicAutoExpanded = false;
+
+          const entryMode = nextMode === "rich" && !this.hasStrictArchiveHtml(entry.renderedHtml)
+            ? "simple"
+            : nextMode;
+
+          if (entry.viewMode !== entryMode) {
+            entry.viewMode = entryMode;
             changed = true;
           }
 
-          if (nextMode === "rich" && !record.richHtml && !record.richRequestPending) {
-            this.requestRichSnapshot(record);
-            queuedRichSnapshots += 1;
-          }
-
-          if (record.refreshArchiveBlock) {
-            recordsToRefresh.push(record);
+          if (entry.refreshArchiveBlock) {
+            recordsToRefresh.push(entry);
           } else {
             requiresFullSync = true;
           }
@@ -7122,7 +8334,44 @@
     }
 
     countHiddenRecords() {
+      if (!this.settings.dynamicScroll) {
+        return this.records.filter((record) => (
+          record.state === "hidden"
+          && this.isRestorableManualEntry(this.getManualArchiveEntry(record))
+        )).length;
+      }
+
       return this.records.filter((record) => record.state === "hidden").length;
+    }
+
+    countPendingManualArchiveRecords() {
+      if (this.settings.dynamicScroll || !this.records.length) {
+        return 0;
+      }
+
+      const liveTurnCount = Math.min(this.records.length, this.getManualLiveTurnCount());
+      const firstLiveIndex = Math.max(0, this.records.length - liveTurnCount);
+      const queuedIds = new Set(this.pendingPlainTextIds);
+
+      return this.records.filter((record, index) => {
+        if (index >= firstLiveIndex || this.isRestorableManualEntry(this.getManualArchiveEntry(record))) {
+          return false;
+        }
+
+        if (record.indexState === "failed" && !this.isPendingManualArchiveRecord(record)) {
+          return false;
+        }
+
+        return Boolean(
+          record.archivePending
+          || record.plainTextPending
+          || queuedIds.has(record.id)
+          || record.indexState === "queued"
+          || record.indexState === "capturing"
+          || record.manualPayloadState === "pending"
+          || this.isPendingManualArchiveRecord(record)
+        );
+      }).length;
     }
 
     countLiveRecords() {
@@ -7130,6 +8379,13 @@
     }
 
     countVisibleArchiveRecords() {
+      if (!this.settings.dynamicScroll) {
+        return this.records.filter((record) => {
+          const entry = this.getManualArchiveEntry(record);
+          return record.state === "visibleArchive" && this.isVisibleManualArchiveEntry(entry);
+        }).length;
+      }
+
       return this.records.filter((record) => record.state === "visibleArchive").length;
     }
 
