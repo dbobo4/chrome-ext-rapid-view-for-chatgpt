@@ -22,8 +22,7 @@
       liveTurnCount: DEFAULT_SETTINGS.liveTurnCount,
       restoreBatchSize: DEFAULT_SETTINGS.restoreBatchSize,
       archiveDefaultRendered: false,
-      dynamicScroll: Boolean(source.dynamicScroll),
-      debugMode: false
+      dynamicScroll: Boolean(source.dynamicScroll)
     };
   }
 

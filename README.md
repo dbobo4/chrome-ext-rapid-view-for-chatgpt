@@ -22,8 +22,6 @@ The result is a lighter page for long-running conversations without losing acces
 - Per-record `Simple` and `Rendered` archive views
 - Expandable simple previews with `Show full simple`
 - Live popup status reporting: `Active`, `Ready`, `Searching`, `Unavailable`
-- Built-in debug overlay and standalone debug log viewer
-- Dedicated visual lab for archive table-scroll experiments
 
 ## How It Works
 
@@ -60,7 +58,7 @@ Rapid View for ChatGPT is designed as a local-only browser extension.
 - Host permissions are limited to ChatGPT pages:
   - `https://chatgpt.com/*`
   - `https://chat.openai.com/*`
-- Archive state, debug logs, and settings are stored in `chrome.storage.local`.
+- Archive state and settings are stored in `chrome.storage.local`.
 - There is no backend service in this repository and no custom network pipeline for exporting conversation data.
 
 ## Repository Structure
@@ -76,10 +74,6 @@ Rapid View for ChatGPT is designed as a local-only browser extension.
 |-- src/
 |   |-- content/
 |   |   `-- content-script.js
-|   |-- debug/
-|   |   |-- debug.html
-|   |   |-- debug.css
-|   |   `-- debug.js
 |   |-- popup/
 |   |   |-- popup.html
 |   |   |-- popup.css
@@ -87,19 +81,15 @@ Rapid View for ChatGPT is designed as a local-only browser extension.
 |   `-- shared/
 |       |-- constants.js
 |       `-- settings.js
-`-- tests/
-    `-- archive_table_scroll_lab/
 ```
 
 ### Important files
 
 - `manifest.json` - Chrome Manifest V3 entry point, permissions, popup registration, and content-script wiring
-- `src/content/content-script.js` - main runtime: detection, archiving, archive UI, dynamic mode, debug overlay
+- `src/content/content-script.js` - main runtime: detection, archiving, archive UI, and dynamic mode
 - `src/shared/constants.js` - default settings, thresholds, and shared status/message constants
 - `src/shared/settings.js` - storage-backed settings loader/saver
 - `src/popup/` - popup UI for enabling the extension and switching between `Manual` and `Dynamic`
-- `src/debug/` - standalone viewer for the extension-local debug log stream
-- `tests/archive_table_scroll_lab/` - static generation harness for comparing table scroll/render variants visually
 
 ## Setup
 
@@ -153,40 +143,12 @@ There is no build step in the current repository. The extension can be loaded di
   - richer archive rendering intended to preserve more of the original ChatGPT formatting
   - useful for code, layout, and richer content review
 
-## Debugging and Validation
-
-The repository already contains developer-focused diagnostics and a targeted visual test harness.
-
-### Debug tooling
-
-- `src/content/content-script.js` includes an in-page debug overlay
-- debug entries are persisted to `chrome.storage.local`
-- `src/debug/debug.html` reads the stored log stream and provides:
-  - refresh
-  - copy
-  - clear
-
-### Visual table-scroll lab
-
-The repository includes a dedicated static lab for comparing archive table rendering and scroll behavior:
-
-- generator: `tests/archive_table_scroll_lab/generate_lab.py`
-- generated output: `tests/archive_table_scroll_lab/generated/`
-
-Run it with:
-
-```text
-python tests\archive_table_scroll_lab\generate_lab.py
-```
-
-### Validation approach in the current repo
+## Validation
 
 The current codebase is validated primarily through:
 
 - focused syntax checks such as `node --check`
 - targeted manual verification on real ChatGPT threads
-- the dedicated archive table visual lab
-- extension-local debug logging
 
 There is not currently a full automated browser end-to-end test suite in the repository.
 
@@ -204,8 +166,8 @@ This project is more about custom page virtualization and DOM management than ab
 
 - The extension depends on ChatGPT's page structure, so major DOM changes on the site can require detector updates.
 - It is currently packaged as a Chrome Manifest V3 extension; no separate Firefox or Edge packaging flow is included.
-- The repository includes strong targeted diagnostics, but not a full automated browser regression suite.
-- Archive rendering for very rich content is an active engineering area, which is why the repo includes dedicated visual testing for table and layout behavior.
+- There is not currently a full automated browser regression suite.
+- Archive rendering for very rich content is an active engineering area.
 
 ## License
 

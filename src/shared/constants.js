@@ -6,7 +6,6 @@
   namespace.Constants = Object.freeze({
     VERSION: "0.1.0",
     STORAGE_KEY: "rapidViewForChatGptSettings",
-    DEBUG_LOG_STORAGE_KEY: "rapidViewForChatGptDebugLog",
     STATUS_MESSAGE_TYPE: "RAPID_VIEW_FOR_CHATGPT_GET_STATUS",
     ARCHIVE_ACTION_MESSAGE_TYPE: "RAPID_VIEW_FOR_CHATGPT_ARCHIVE_ACTION",
     DEFAULT_SETTINGS: Object.freeze({
@@ -14,8 +13,7 @@
       liveTurnCount: 4,
       restoreBatchSize: 4,
       archiveDefaultRendered: false,
-      dynamicScroll: false,
-      debugMode: false
+      dynamicScroll: false
     }),
     LIMITS: Object.freeze({
       minLiveTurnCount: 4,
@@ -40,10 +38,6 @@
       rescanDebounceMs: 60,
       rootMutationDebounceMs: 60,
       detectionFailureLogCooldownMs: 750,
-      longTaskLogMinDurationMs: 200,
-      longTaskLogCooldownMs: 1200,
-      debugLogFlushMs: 250,
-      debugLogFlushTimeoutMs: 150,
       heightSampleSize: 6,
       manualLiveTurnCount: 2,
       archiveIndexBatchSize: 4,

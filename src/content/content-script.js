@@ -15,323 +15,11 @@
   const TURN_SELECTOR = "section[data-turn-id][data-turn][data-testid^='conversation-turn-']";
 
   class Logger {
-    constructor() {
-      this.debugEnabled = false;
-      this.listener = null;
-    }
+    info() {}
 
-    setDebugEnabled(enabled) {
-      this.debugEnabled = Boolean(enabled);
-    }
+    warn() {}
 
-    setListener(listener) {
-      this.listener = typeof listener === "function" ? listener : null;
-    }
-
-    emit(level, args) {
-      const entry = this.normalizeEntry(level, args);
-
-      if (this.listener) {
-        this.listener(entry);
-      }
-
-      return entry;
-    }
-
-    normalizeEntry(level, args) {
-      const parts = Array.from(args || []);
-      const first = parts.shift();
-      const message = typeof first === "string"
-        ? first
-        : this.stringifyValue(first);
-
-      let details = null;
-      if (parts.length === 1) {
-        details = parts[0];
-      } else if (parts.length > 1) {
-        details = { values: parts };
-      }
-
-      return {
-        ts: new Date().toISOString(),
-        level,
-        message,
-        details
-      };
-    }
-
-    stringifyValue(value) {
-      if (typeof value === "string") {
-        return value;
-      }
-
-      try {
-        return JSON.stringify(value);
-      } catch (error) {
-        return String(value);
-      }
-    }
-
-    info(...args) {
-      this.emit("info", args);
-    }
-
-    warn(...args) {
-      this.emit("warn", args);
-    }
-
-    error(...args) {
-      this.emit("error", args);
-    }
-  }
-
-  class DebugOverlay {
-    constructor() {
-      this.element = null;
-      this.summaryElement = null;
-      this.logElement = null;
-      this.copyButton = null;
-      this.clearButton = null;
-      this.collapseButton = null;
-      this.bodyElement = null;
-      this.debugEnabled = true;
-      this.collapsed = false;
-      this.entries = [];
-      this.maxEntries = 220;
-    }
-
-    setDebugEnabled(enabled) {
-      this.debugEnabled = enabled !== false;
-
-      if (!this.debugEnabled && this.element) {
-        this.element.remove();
-        this.element = null;
-        this.summaryElement = null;
-        this.logElement = null;
-        this.copyButton = null;
-        this.clearButton = null;
-        this.collapseButton = null;
-        this.bodyElement = null;
-      }
-
-      if (this.debugEnabled) {
-        this.ensureElement();
-        this.renderEntries();
-      }
-    }
-
-    ensureElement() {
-      if (!this.debugEnabled || this.element) {
-        return;
-      }
-
-      const panel = document.createElement("div");
-      const header = document.createElement("div");
-      const title = document.createElement("div");
-      const actions = document.createElement("div");
-      const collapseButton = document.createElement("button");
-      const copyButton = document.createElement("button");
-      const clearButton = document.createElement("button");
-      const body = document.createElement("div");
-      const summary = document.createElement("div");
-      const log = document.createElement("textarea");
-
-      panel.setAttribute("data-rapid-view-for-chatgpt-overlay", "true");
-      Object.assign(panel.style, {
-        position: "fixed",
-        right: "14px",
-        bottom: "14px",
-        width: "360px",
-        maxWidth: "calc(100vw - 28px)",
-        borderRadius: "12px",
-        background: "rgba(236, 241, 247, 0.92)",
-        color: "#22354d",
-        boxShadow: "0 12px 30px rgba(17, 24, 39, 0.24)",
-        border: "1px solid rgba(110, 126, 157, 0.22)",
-        zIndex: "2147483647",
-        backdropFilter: "blur(10px)",
-        font: "12px/1.35 'Segoe UI', sans-serif",
-        overflow: "hidden"
-      });
-
-      Object.assign(header.style, {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "8px",
-        padding: "10px 12px",
-        background: "linear-gradient(180deg, rgba(223, 230, 240, 0.95), rgba(233, 238, 245, 0.92))",
-        borderBottom: "1px solid rgba(123, 139, 170, 0.18)"
-      });
-
-      Object.assign(title.style, {
-        font: "700 12px/1 'Segoe UI', sans-serif",
-        letterSpacing: "0.04em",
-        textTransform: "uppercase",
-        color: "#314663"
-      });
-      title.textContent = "Booster Debug Log";
-
-      Object.assign(actions.style, {
-        display: "flex",
-        gap: "6px"
-      });
-
-      for (const button of [collapseButton, copyButton, clearButton]) {
-        button.type = "button";
-        Object.assign(button.style, {
-          border: "1px solid rgba(116, 133, 166, 0.18)",
-          borderRadius: "999px",
-          padding: "4px 8px",
-          cursor: "pointer",
-          background: "rgba(243, 246, 251, 0.92)",
-          color: "#334760",
-          font: "600 11px/1 'Segoe UI', sans-serif"
-        });
-      }
-
-      collapseButton.textContent = "Hide";
-      copyButton.textContent = "Copy";
-      clearButton.textContent = "Clear";
-
-      Object.assign(body.style, {
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        padding: "10px 12px"
-      });
-
-      Object.assign(summary.style, {
-        whiteSpace: "pre-line",
-        color: "#40556f",
-        font: "600 11px/1.4 'Segoe UI', sans-serif"
-      });
-
-      log.readOnly = true;
-      log.spellcheck = false;
-      Object.assign(log.style, {
-        width: "100%",
-        minHeight: "168px",
-        resize: "vertical",
-        border: "1px solid rgba(118, 135, 168, 0.16)",
-        borderRadius: "10px",
-        background: "rgba(249, 251, 254, 0.94)",
-        color: "#23354d",
-        padding: "10px",
-        font: "11px/1.45 Consolas, 'Courier New', monospace",
-        boxSizing: "border-box"
-      });
-
-      collapseButton.addEventListener("click", () => {
-        this.collapsed = !this.collapsed;
-        body.style.display = this.collapsed ? "none" : "flex";
-        collapseButton.textContent = this.collapsed ? "Show" : "Hide";
-      });
-
-      copyButton.addEventListener("click", async () => {
-        const value = this.getCopyText();
-        try {
-          await navigator.clipboard.writeText(value);
-          copyButton.textContent = "Copied";
-          global.setTimeout(() => {
-            copyButton.textContent = "Copy";
-          }, 1200);
-        } catch (error) {
-          if (this.logElement) {
-            this.logElement.focus();
-            this.logElement.select();
-            document.execCommand("copy");
-          }
-        }
-      });
-
-      clearButton.addEventListener("click", () => {
-        this.entries = [];
-        this.renderEntries();
-      });
-
-      actions.appendChild(collapseButton);
-      actions.appendChild(copyButton);
-      actions.appendChild(clearButton);
-      header.appendChild(title);
-      header.appendChild(actions);
-      body.appendChild(summary);
-      body.appendChild(log);
-      panel.appendChild(header);
-      panel.appendChild(body);
-      document.documentElement.appendChild(panel);
-
-      this.element = panel;
-      this.summaryElement = summary;
-      this.logElement = log;
-      this.copyButton = copyButton;
-      this.clearButton = clearButton;
-      this.collapseButton = collapseButton;
-      this.bodyElement = body;
-    }
-
-    getCopyText() {
-      return this.entries.join("\n").replace(/\n+$/u, "");
-    }
-
-    append(entry) {
-      if (!this.debugEnabled) {
-        return;
-      }
-
-      this.ensureElement();
-      this.entries.push(this.formatEntry(entry));
-      if (this.entries.length > this.maxEntries) {
-        this.entries = this.entries.slice(-this.maxEntries);
-      }
-      this.renderEntries();
-    }
-
-    formatEntry(entry) {
-      const time = entry.ts ? entry.ts.slice(11, 23) : new Date().toISOString().slice(11, 23);
-      const level = (entry.level || "info").toUpperCase();
-      const message = entry.message || "";
-      const details = entry.details ? ` ${this.stringifyDetails(entry.details)}` : "";
-      return `[${time}] ${level} ${message}${details}`;
-    }
-
-    stringifyDetails(details) {
-      try {
-        return JSON.stringify(details);
-      } catch (error) {
-        return String(details);
-      }
-    }
-
-    renderEntries() {
-      if (!this.logElement) {
-        return;
-      }
-
-      this.logElement.value = this.getCopyText();
-      this.logElement.scrollTop = this.logElement.scrollHeight;
-    }
-
-    render(status) {
-      if (!this.debugEnabled) {
-        return;
-      }
-
-      this.ensureElement();
-      if (!this.summaryElement) {
-        return;
-      }
-
-      const lines = [
-        `State: ${status.state || "-"}`,
-        `Reason: ${status.reason || "-"}`,
-        `Messages: ${Number.isFinite(status.totalMessages) ? status.totalMessages : "-"}`,
-        `Live: ${Number.isFinite(status.mountedMessages) ? status.mountedMessages : "-"}`,
-        `Archived hidden: ${Number.isFinite(status.hiddenMessages) ? status.hiddenMessages : "-"}`
-      ];
-
-      this.summaryElement.textContent = lines.join("\n");
-    }
+    error() {}
   }
 
   class DomDetector {
@@ -4845,8 +4533,7 @@
         return true;
       }
 
-      return element.hasAttribute("data-rapid-view-for-chatgpt-overlay")
-        || element.hasAttribute("data-rapid-view-for-chatgpt-archive-host")
+      return element.hasAttribute("data-rapid-view-for-chatgpt-archive-host")
         || element.hasAttribute("data-rapid-view-for-chatgpt-archive-block");
     }
 
@@ -8800,10 +8487,8 @@
   class BoosterController {
     constructor() {
       this.logger = new Logger();
-      this.overlay = new DebugOverlay();
       this.detector = new DomDetector(this.logger);
       this.engine = new ArchiveEngine(this.logger);
-      this.logger.setListener((entry) => this.recordDebugEntry(entry));
       this.engine.setStatusListener((engineStatus) => {
         if (!this.settings.enabled || !this.engine.root) {
           this.updateStatus(engineStatus);
@@ -8832,32 +8517,21 @@
       this.bootstrapStartedAt = 0;
       this.lastBootstrapSignature = "";
       this.forceImmediateBootstrap = false;
-      this.debugLogEntries = [];
-      this.debugLogFlushTimer = 0;
-      this.debugTabRequested = false;
-      this.lastLongTaskLogAt = 0;
       this.lastDetectionFailureLogAt = 0;
       this.lastActivationStatusLogSignature = "";
       this.unsubscribeSettings = null;
       this.onRuntimeMessage = this.onRuntimeMessage.bind(this);
       this.handleNavigationEvent = this.handleNavigationEvent.bind(this);
-      this.handleRuntimeError = this.handleRuntimeError.bind(this);
-      this.handleRuntimeRejection = this.handleRuntimeRejection.bind(this);
     }
 
     async init() {
       this.settings = await settingsApi.load();
-      this.logger.setDebugEnabled(Boolean(this.settings.enabled));
-      this.overlay.setDebugEnabled(Boolean(this.settings.enabled));
       this.engine.setSettings(this.settings);
-      this.installRuntimeMonitors();
 
       this.unsubscribeSettings = settingsApi.onChanged((nextSettings) => {
         const wasEnabled = Boolean(this.settings && this.settings.enabled);
         const hadRoot = Boolean(this.engine.root);
         this.settings = nextSettings;
-        this.logger.setDebugEnabled(Boolean(nextSettings.enabled));
-        this.overlay.setDebugEnabled(Boolean(nextSettings.enabled));
 
         if (wasEnabled && !nextSettings.enabled) {
           this.disconnectBodyObserver();
@@ -8892,157 +8566,6 @@
       chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
       this.startObservers();
       this.startBootstrap("startup");
-    }
-
-    installRuntimeMonitors() {
-      global.addEventListener("error", this.handleRuntimeError);
-      global.addEventListener("unhandledrejection", this.handleRuntimeRejection);
-
-      if (global.PerformanceObserver) {
-        try {
-          const longTaskObserver = new PerformanceObserver((list) => {
-            for (const entry of list.getEntries()) {
-              const now = Date.now();
-              if (
-                entry.duration < LIMITS.longTaskLogMinDurationMs
-                || now - this.lastLongTaskLogAt < LIMITS.longTaskLogCooldownMs
-              ) {
-                continue;
-              }
-
-              this.lastLongTaskLogAt = now;
-              this.logger.warn("long-task", {
-                durationMs: Number(entry.duration.toFixed(1)),
-                name: entry.name || "main"
-              });
-            }
-          });
-          longTaskObserver.observe({ entryTypes: ["longtask"] });
-        } catch (error) {
-          this.logger.warn("long-task-observer-unavailable", {
-            message: error && error.message ? error.message : String(error)
-          });
-        }
-      }
-    }
-
-    handleRuntimeError(event) {
-      this.logger.error("runtime-error", {
-        message: event && event.message ? event.message : "Unknown error",
-        source: event && event.filename ? event.filename : "",
-        line: event && Number.isFinite(event.lineno) ? event.lineno : 0,
-        column: event && Number.isFinite(event.colno) ? event.colno : 0
-      });
-    }
-
-    handleRuntimeRejection(event) {
-      const reason = event && "reason" in event ? event.reason : "Unknown rejection";
-      this.logger.error("unhandled-rejection", {
-        reason: reason && reason.message ? reason.message : String(reason)
-      });
-    }
-
-    recordDebugEntry(entry) {
-      this.overlay.append(entry);
-      this.debugLogEntries.push(entry);
-      if (this.debugLogEntries.length > 400) {
-        this.debugLogEntries = this.debugLogEntries.slice(-400);
-      }
-      this.scheduleDebugLogFlush(entry.level === "error" ? 0 : 80);
-    }
-
-    scheduleDebugLogFlush(delayMs = LIMITS.debugLogFlushMs) {
-      if (this.debugLogFlushTimer) {
-        global.clearTimeout(this.debugLogFlushTimer);
-      }
-
-      this.debugLogFlushTimer = global.setTimeout(() => {
-        this.debugLogFlushTimer = 0;
-        this.flushDebugLogStorage().catch(() => {
-          // Ignore storage write failures in diagnostics.
-        });
-      }, delayMs);
-    }
-
-    buildDebugLogPayload() {
-      return {
-        updatedAt: new Date().toISOString(),
-        routeKey: this.routeKey,
-        entries: this.debugLogEntries
-      };
-    }
-
-    async flushDebugLogStorage(timeoutMs = 0) {
-      const payload = this.buildDebugLogPayload();
-      const writePromise = new Promise((resolve) => {
-        try {
-          chrome.storage.local.set({
-            [constants.DEBUG_LOG_STORAGE_KEY]: payload
-          }, () => {
-            resolve({
-              ok: !chrome.runtime.lastError,
-              message: chrome.runtime.lastError ? chrome.runtime.lastError.message : ""
-            });
-          });
-        } catch (error) {
-          resolve({
-            ok: false,
-            message: error && error.message ? error.message : String(error)
-          });
-        }
-      });
-
-      if (!timeoutMs || timeoutMs <= 0) {
-        return writePromise;
-      }
-
-      return Promise.race([
-        writePromise,
-        new Promise((resolve) => {
-          global.setTimeout(() => {
-            resolve({
-              ok: false,
-              timedOut: true,
-              message: "debug-log-flush-timeout"
-            });
-          }, timeoutMs);
-        })
-      ]);
-    }
-
-    openDebugLogTab() {
-      try {
-        const tabRef = global.open(
-          chrome.runtime.getURL("src/debug/debug.html"),
-          "rapid-view-for-chatgpt-debug"
-        );
-
-        if (!tabRef) {
-          this.logger.error("debug-tab-open-failed", {
-            message: "window.open returned null"
-          });
-        }
-      } catch (error) {
-        this.logger.error("debug-tab-open-failed", {
-          message: error && error.message ? error.message : String(error)
-        });
-      }
-    }
-
-    prepareForPotentialFreeze(actionLabel) {
-      this.logger.info("pre-heavy-action", {
-        action: actionLabel && actionLabel.action ? actionLabel.action : actionLabel,
-        details: actionLabel && typeof actionLabel === "object" ? actionLabel : null,
-        routeKey: this.routeKey
-      });
-
-      global.setTimeout(() => {
-        this.openDebugLogTab();
-      }, 0);
-
-      this.flushDebugLogStorage(LIMITS.debugLogFlushTimeoutMs).catch(() => {
-        // Ignore debug flush failures outside the critical path.
-      });
     }
 
     installNavigationHooks() {
@@ -9217,8 +8740,6 @@
         this.disconnectBodyObserver();
         this.disconnectRootObserver();
         this.engine.destroy();
-        this.logger.setDebugEnabled(false);
-        this.overlay.setDebugEnabled(false);
         this.updateStatus({
           state: STATUS.disabled,
           reason: "Extension disabled in popup."
@@ -9444,7 +8965,6 @@
         ...this.engine.getStatus(),
         ...partialStatus
       };
-      this.overlay.render(this.status);
     }
 
     disconnectRootObserver() {
@@ -9536,27 +9056,6 @@
 
   const controller = new BoosterController();
   controller.init().catch((error) => {
-    try {
-      chrome.storage.local.set({
-        [constants.DEBUG_LOG_STORAGE_KEY]: {
-          updatedAt: new Date().toISOString(),
-          routeKey: `${location.pathname}${location.search}`,
-          entries: [
-            {
-              ts: new Date().toISOString(),
-              level: "error",
-              message: "fatal-init-failure",
-              details: {
-                message: error && error.message ? error.message : String(error)
-              }
-            }
-          ]
-        }
-      }).catch(() => {
-        // Ignore storage failures for fatal initialization diagnostics.
-      });
-    } catch (storageError) {
-      void storageError;
-    }
+    void error;
   });
 })(globalThis);
