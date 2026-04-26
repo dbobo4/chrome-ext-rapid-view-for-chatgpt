@@ -2063,6 +2063,9 @@
           previous.snapshotHtml = previous.snapshotHtml || "";
           previous.richHtml = previous.richHtml || "";
           previous.plainTextFallback = previous.plainTextFallback || "";
+          previous.renderProfile = previous.renderProfile && typeof previous.renderProfile === "object"
+            ? previous.renderProfile
+            : null;
           previous.hadRichMedia = Boolean(previous.hadRichMedia);
           previous.richRequestPending = Boolean(previous.richRequestPending);
           previous.plainTextPending = Boolean(previous.plainTextPending);
@@ -2106,6 +2109,7 @@
           snapshotHtml: "",
           richHtml: "",
           plainTextFallback: "",
+          renderProfile: null,
           hadRichMedia: false,
           richRequestPending: false,
           plainTextPending: false,
@@ -2280,6 +2284,9 @@
       const cachedRenderedHtml = this.hasStrictArchiveHtml(record.richHtml)
         ? record.richHtml.trim()
         : (this.hasStrictArchiveHtml(existing?.renderedHtml) ? existing.renderedHtml.trim() : "");
+      const cachedRenderProfile = existing?.renderProfile && typeof existing.renderProfile === "object"
+        ? existing.renderProfile
+        : null;
 
       if (!(sourceRoot instanceof Element) && !cachedPlainText && !cachedSimpleHtml && !cachedRenderedHtml) {
         record.manualPayloadState = "pending";
@@ -2290,6 +2297,7 @@
       let plainText = cachedPlainText;
       let simpleHtml = cachedSimpleHtml || (cachedPlainText ? this.renderPlainTextHtml(cachedPlainText) : "");
       let renderedHtml = cachedRenderedHtml;
+      let renderProfile = cachedRenderProfile;
 
       if (sourceRoot instanceof Element) {
         const snapshotSource = this.selectSnapshotSource(sourceRoot, record.role);
@@ -2319,6 +2327,7 @@
           plainText = snapshotText || extractedText || cachedPlainText;
           simpleHtml = simpleCandidate || (plainText ? this.renderPlainTextHtml(plainText) : cachedSimpleHtml);
           renderedHtml = renderedCandidate || cachedRenderedHtml;
+          renderProfile = snapshot.renderProfile || renderProfile;
         }
       }
 
@@ -2345,6 +2354,7 @@
         refreshArchiveBlock: null,
         simpleExpanded: false,
         dynamicAutoExpanded: false,
+        renderProfile: null,
         visible: false,
         estimatedHeight: 0
       };
@@ -2357,6 +2367,7 @@
         ? simpleHtml
         : (entry.simpleText ? this.renderPlainTextHtml(entry.simpleText) : "");
       entry.renderedHtml = this.hasStrictArchiveHtml(renderedHtml) ? renderedHtml : "";
+      entry.renderProfile = renderProfile || null;
       const entryReady = this.hasStrictReadyManualArchiveEntry(entry);
       entry.visible = Boolean(existing?.visible);
       entry.estimatedHeight = Math.max(existing?.estimatedHeight || 0, record.estimatedHeight || 0);
@@ -2370,6 +2381,9 @@
       }
       if (entry.renderedHtml) {
         record.richHtml = entry.renderedHtml;
+      }
+      if (entry.renderProfile) {
+        record.renderProfile = entry.renderProfile;
       }
       record.snapshotState = entryReady ? "ready" : "empty";
       record.indexState = entryReady ? "ready" : "queued";
@@ -3149,6 +3163,9 @@
       }
 
       record.hadRichMedia = record.hadRichMedia || snapshot.hadRichMedia;
+      if (snapshot.renderProfile) {
+        record.renderProfile = snapshot.renderProfile;
+      }
       record.snapshotState = "ready";
       record.indexState = "ready";
 
@@ -3202,6 +3219,9 @@
       }
       if (this.hasStrictArchiveHtml(snapshot.richHtml)) {
         record.richHtml = snapshot.richHtml;
+      }
+      if (snapshot.renderProfile) {
+        record.renderProfile = snapshot.renderProfile;
       }
       if (this.hasUsableArchiveText(nextPlainText) && (!previousNormalizedPlainText || nextPlainText.length >= previousNormalizedPlainText.length)) {
         record.plainTextFallback = nextPlainText || record.plainTextFallback || this.extractPlainText(effectiveSource);
@@ -3598,7 +3618,7 @@
     buildSnapshot(turnNode, role, options = {}) {
       const includeRich = options.includeRich !== false;
       const source = this.selectSnapshotSource(turnNode, role);
-      const context = { hadRichMedia: false };
+      const context = { hadRichMedia: false, renderProfile: null };
       const simpleHtmlCandidate = this.serializeSnapshotNode(source, context).trim();
       const text = this.extractPlainText(source);
       const simpleHtml = this.hasStrictArchiveHtml(simpleHtmlCandidate)
@@ -3607,11 +3627,13 @@
       const richHtml = includeRich
         ? this.buildValidatedRichSnapshot(turnNode, role, context)
         : "";
+      const renderProfile = context.renderProfile || this.buildArchiveRenderProfile(turnNode, source, role);
 
       return {
         simpleHtml,
         richHtml,
         text,
+        renderProfile,
         hadRichMedia: context.hadRichMedia
       };
     }
@@ -3642,6 +3664,7 @@
         }
 
         context.hadRichMedia = context.hadRichMedia || candidateContext.hadRichMedia;
+        context.renderProfile = this.buildArchiveRenderProfile(turnNode, candidate, role);
         this.logger.info("rich-snapshot-source:selected", {
           role,
           candidate: this.describeElement(candidate),
@@ -3658,6 +3681,171 @@
         rejectedCandidates: rejectionSamples.slice(0, 5)
       });
       return "";
+    }
+
+    buildArchiveRenderProfile(turnNode, source, role) {
+      void turnNode;
+
+      if (!(source instanceof HTMLElement)) {
+        return null;
+      }
+
+      const rootProfile = this.captureElementRenderProfile(source);
+      if (!rootProfile) {
+        return null;
+      }
+
+      const elements = this.captureArchiveElementProfiles(source, role);
+      return {
+        version: 1,
+        role: role === "user" ? "user" : "assistant",
+        sourceKind: this.inferArchiveRenderSourceKind(source, role, rootProfile, elements),
+        root: rootProfile,
+        elements
+      };
+    }
+
+    captureElementRenderProfile(element) {
+      if (!(element instanceof HTMLElement) || typeof global.getComputedStyle !== "function") {
+        return null;
+      }
+
+      let computed = null;
+      try {
+        computed = global.getComputedStyle(element);
+      } catch (error) {
+        return null;
+      }
+
+      if (!computed) {
+        return null;
+      }
+
+      const propertyPairs = [
+        ["whiteSpace", "white-space"],
+        ["overflowWrap", "overflow-wrap"],
+        ["wordBreak", "word-break"],
+        ["direction", "direction"],
+        ["textAlign", "text-align"],
+        ["tabSize", "tab-size"],
+        ["display", "display"]
+      ];
+      const profile = {};
+
+      for (const [key, cssName] of propertyPairs) {
+        const value = computed.getPropertyValue(cssName) || computed[key] || "";
+        const normalized = this.normalizeArchiveRenderStyleValue(key, value);
+        if (normalized) {
+          profile[key] = normalized;
+        }
+      }
+
+      return Object.keys(profile).length ? profile : null;
+    }
+
+    normalizeArchiveRenderStyleValue(key, value) {
+      const normalized = String(value || "").trim().toLowerCase();
+      if (!normalized || normalized.length > 64) {
+        return "";
+      }
+
+      const allowedValues = {
+        whiteSpace: new Set(["normal", "pre", "pre-wrap", "pre-line", "break-spaces", "nowrap"]),
+        overflowWrap: new Set(["normal", "break-word", "anywhere"]),
+        wordBreak: new Set(["normal", "break-all", "keep-all", "break-word"]),
+        direction: new Set(["ltr", "rtl"]),
+        textAlign: new Set(["start", "end", "left", "right", "center", "justify", "match-parent"]),
+        display: new Set(["block", "inline", "inline-block", "flex", "inline-flex", "grid", "table", "table-row", "table-cell", "list-item"])
+      };
+
+      if (key === "tabSize") {
+        return /^\d+(\.\d+)?(px|em|rem|ch)?$/u.test(normalized) ? normalized : "";
+      }
+
+      return allowedValues[key] && allowedValues[key].has(normalized) ? normalized : "";
+    }
+
+    captureArchiveElementProfiles(source, role) {
+      const definitions = [
+        { kind: "plainText", selector: ".whitespace-pre-wrap, [data-message-author-role='user'] [dir='auto']" },
+        { kind: "markdown", selector: ".markdown-new-styling, .markdown.prose" },
+        { kind: "codeBlock", selector: "pre" },
+        { kind: "table", selector: "table" },
+        { kind: "list", selector: "ul, ol" },
+        { kind: "quote", selector: "blockquote" }
+      ];
+      const profiles = [];
+      const seen = new Set();
+
+      for (const definition of definitions) {
+        const candidates = [];
+        if (this.matchesArchiveSelector(source, definition.selector)) {
+          candidates.push(source);
+        }
+        candidates.push(...Array.from(source.querySelectorAll(definition.selector)));
+
+        for (const candidate of candidates) {
+          if (!(candidate instanceof HTMLElement) || seen.has(candidate)) {
+            continue;
+          }
+
+          const style = this.captureElementRenderProfile(candidate);
+          if (!style) {
+            continue;
+          }
+
+          profiles.push({
+            kind: definition.kind,
+            role: role === "user" ? "user" : "assistant",
+            style
+          });
+          seen.add(candidate);
+          break;
+        }
+      }
+
+      return profiles.slice(0, 8);
+    }
+
+    matchesArchiveSelector(element, selector) {
+      if (!(element instanceof Element)) {
+        return false;
+      }
+
+      try {
+        return element.matches(selector);
+      } catch (error) {
+        return false;
+      }
+    }
+
+    inferArchiveRenderSourceKind(source, role, rootProfile, elements) {
+      const kinds = new Set((elements || []).map((entry) => entry.kind));
+      const hasStructuralContent = kinds.has("codeBlock")
+        || kinds.has("table")
+        || kinds.has("list")
+        || kinds.has("quote")
+        || Boolean(source.querySelector("pre, table, ul, ol, blockquote, h1, h2, h3, h4, h5, h6"));
+      const hasPreWhiteSpace = rootProfile
+        && ["pre", "pre-wrap", "pre-line", "break-spaces"].includes(rootProfile.whiteSpace);
+
+      if (role === "user" || hasPreWhiteSpace || this.matchesArchiveSelector(source, ".whitespace-pre-wrap")) {
+        return hasStructuralContent ? "mixed" : "plainText";
+      }
+
+      if (kinds.has("table") && !kinds.has("codeBlock")) {
+        return "table";
+      }
+
+      if (kinds.has("codeBlock") && !kinds.has("table")) {
+        return "code";
+      }
+
+      if (this.matchesArchiveSelector(source, ".markdown-new-styling, .markdown.prose")) {
+        return hasStructuralContent ? "mixed" : "markdown";
+      }
+
+      return hasStructuralContent ? "mixed" : (role === "assistant" ? "markdown" : "plainText");
     }
 
     buildRichSnapshot(source, context) {
@@ -6784,6 +6972,7 @@
 
         body.innerHTML = this.getArchiveBodyHtml(record);
         this.styleArchiveBody(body, record.viewMode);
+        this.applyArchiveRenderProfile(body, record);
         this.syncSimplePreviewState(body, record, updateView);
         this.logger.info("archive-block:update-view", {
           id: record.id,
@@ -7151,11 +7340,122 @@
       }
     }
 
+    applyArchiveRenderProfile(body, record) {
+      if (!(body instanceof HTMLElement) || !record || record.viewMode !== "rich") {
+        return;
+      }
+
+      const profile = record.renderProfile && typeof record.renderProfile === "object"
+        ? record.renderProfile
+        : null;
+      const rootProfile = profile && profile.root && typeof profile.root === "object"
+        ? profile.root
+        : null;
+      const plainTextElementProfile = profile && Array.isArray(profile.elements)
+        ? profile.elements.find((entry) => entry && entry.kind === "plainText" && entry.style)?.style || null
+        : null;
+      const plainTextLike = this.isArchiveRenderedBodyPlainTextLike(body);
+      const shouldPreservePlainText = record.role === "user"
+        && (
+          plainTextLike
+          || !profile
+          || profile.sourceKind === "plainText"
+          || profile.sourceKind === "mixed"
+        );
+      const effectiveRootProfile = shouldPreservePlainText && plainTextElementProfile
+        ? plainTextElementProfile
+        : rootProfile;
+      const style = this.buildArchiveRenderProfileStyle(effectiveRootProfile, shouldPreservePlainText);
+
+      if (!Object.keys(style).length) {
+        return;
+      }
+
+      for (const target of this.getArchiveRenderProfileTargets(body, shouldPreservePlainText)) {
+        Object.assign(target.style, style);
+      }
+    }
+
+    buildArchiveRenderProfileStyle(rootProfile, shouldPreservePlainText) {
+      const style = {};
+      const profiledWhiteSpace = this.normalizeArchiveRenderStyleValue("whiteSpace", rootProfile?.whiteSpace || "");
+      const whiteSpace = shouldPreservePlainText && (!profiledWhiteSpace || profiledWhiteSpace === "normal")
+        ? "pre-wrap"
+        : profiledWhiteSpace;
+
+      if (whiteSpace && (shouldPreservePlainText || whiteSpace !== "normal")) {
+        style.whiteSpace = whiteSpace;
+      }
+
+      const profiledOverflowWrap = this.normalizeArchiveRenderStyleValue("overflowWrap", rootProfile?.overflowWrap || "");
+      const overflowWrap = shouldPreservePlainText && (!profiledOverflowWrap || profiledOverflowWrap === "normal")
+        ? "anywhere"
+        : profiledOverflowWrap;
+      if (overflowWrap && (shouldPreservePlainText || overflowWrap !== "normal")) {
+        style.overflowWrap = overflowWrap;
+      }
+
+      const wordBreak = this.normalizeArchiveRenderStyleValue("wordBreak", rootProfile?.wordBreak || "");
+      if (wordBreak && wordBreak !== "normal") {
+        style.wordBreak = wordBreak;
+      }
+
+      const direction = this.normalizeArchiveRenderStyleValue("direction", rootProfile?.direction || "");
+      if (direction) {
+        style.direction = direction;
+      }
+
+      const textAlign = this.normalizeArchiveRenderStyleValue("textAlign", rootProfile?.textAlign || "");
+      if (textAlign && textAlign !== "start") {
+        style.textAlign = textAlign;
+      }
+
+      const tabSize = this.normalizeArchiveRenderStyleValue("tabSize", rootProfile?.tabSize || "");
+      if (tabSize && style.whiteSpace && style.whiteSpace !== "normal") {
+        style.tabSize = tabSize;
+      }
+
+      return style;
+    }
+
+    getArchiveRenderProfileTargets(body, shouldPreservePlainText) {
+      const targets = [body];
+      if (!shouldPreservePlainText) {
+        return targets;
+      }
+
+      const firstContentElement = Array.from(body.children).find((child) => (
+        child instanceof HTMLElement
+        && !child.matches("pre, code, table, thead, tbody, tr, th, td, ul, ol, li, blockquote")
+      ));
+
+      if (firstContentElement) {
+        targets.push(firstContentElement);
+      }
+
+      return targets;
+    }
+
+    isArchiveRenderedBodyPlainTextLike(body) {
+      if (!(body instanceof HTMLElement) || !(body.textContent || "").trim()) {
+        return false;
+      }
+
+      return !body.querySelector(
+        "pre, table, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, [data-rapid-view-for-chatgpt-code-block], [data-rapid-view-for-chatgpt-table-shell], [data-rapid-view-for-chatgpt-latex], [data-rapid-view-for-chatgpt-rich-placeholder], img, picture, canvas, svg, video, audio, iframe, object, embed, hr"
+      );
+    }
+
     styleArchiveBody(body, viewMode) {
       Object.assign(body.style, {
         font: viewMode === "rich" ? "14px/1.55 'Segoe UI', sans-serif" : "14px/1.6 'Segoe UI', sans-serif",
         color: viewMode === "rich" ? "#25394f" : "#20344a",
         overflowWrap: "anywhere",
+        whiteSpace: "",
+        wordBreak: "",
+        direction: "",
+        textAlign: "",
+        tabSize: "",
         width: "100%",
         maxWidth: "100%",
         minWidth: "0",
