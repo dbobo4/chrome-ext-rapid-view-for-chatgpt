@@ -13,6 +13,17 @@
   const { LIMITS, STATUS, STATUS_MESSAGE_TYPE, ARCHIVE_ACTION_MESSAGE_TYPE } = constants;
   const OWN_ROOT_MUTATION_GUARD_MS = 250;
   const TURN_SELECTOR = "section[data-turn-id][data-turn][data-testid^='conversation-turn-']";
+  const RAPID_VIEW_OWNED_UI_SELECTOR = [
+    "[data-rapid-view-for-chatgpt-archive-host]",
+    "[data-rapid-view-for-chatgpt-archive-block]",
+    "[data-rapid-view-for-chatgpt-restore]",
+    "[data-rapid-view-for-chatgpt-archive-actions]",
+    "[data-rapid-view-for-chatgpt-dynamic-reader]",
+    "[data-rapid-view-for-chatgpt-dynamic-window]",
+    "[data-rapid-view-for-chatgpt-dynamic-measure]",
+    "[data-rapid-view-for-chatgpt-dynamic-timeline]",
+    "[data-rapid-view-for-chatgpt-dynamic-slot]"
+  ].join(",");
 
   class Logger {
     info() {}
@@ -173,7 +184,12 @@
     }
 
     detectFromKnownRoot(root, scrollContainer, preferredMain = null) {
-      if (!(root instanceof HTMLElement) || !document.contains(root) || !this.isVisible(root)) {
+      if (
+        !(root instanceof HTMLElement)
+        || !document.contains(root)
+        || !this.isVisible(root)
+        || this.isRapidViewOwnedElement(root)
+      ) {
         return {
           ok: false,
           reason: "Known message root is no longer available."
@@ -306,12 +322,14 @@
       let best = null;
 
       for (const candidateRoot of candidateRoots) {
-        if (!this.isVisible(candidateRoot)) {
+        if (!this.isVisible(candidateRoot) || this.isRapidViewOwnedElement(candidateRoot)) {
           this.recordCandidateRejection(summary, "parent-not-visible", candidateRoot);
           continue;
         }
 
-        const directChildren = Array.from(candidateRoot.children).filter((child) => this.isVisible(child));
+        const directChildren = Array.from(candidateRoot.children).filter((child) => (
+          this.isVisible(child) && !this.isRapidViewOwnedElement(child)
+        ));
         const directMessageChildren = directChildren.filter((child) => wrapperByElement.has(child));
         summary.candidateCount += 1;
 
@@ -394,8 +412,17 @@
       const seenWrappers = new Set();
 
       for (const turnNode of turnNodes) {
+        if (this.isRapidViewOwnedElement(turnNode)) {
+          continue;
+        }
+
         const wrapper = this.findNearestSingleTurnWrapper(turnNode, thread);
-        if (!(wrapper instanceof HTMLElement) || seenWrappers.has(wrapper) || !this.isVisible(wrapper)) {
+        if (
+          !(wrapper instanceof HTMLElement)
+          || seenWrappers.has(wrapper)
+          || !this.isVisible(wrapper)
+          || this.isRapidViewOwnedElement(wrapper)
+        ) {
           continue;
         }
 
@@ -455,15 +482,17 @@
     }
 
     getDirectTurnChildren(root) {
-      if (!(root instanceof HTMLElement)) {
+      if (!(root instanceof HTMLElement) || this.isRapidViewOwnedElement(root)) {
         return [];
       }
 
-      return Array.from(root.children).filter((child) => this.isTurnNode(child));
+      return Array.from(root.children).filter((child) => (
+        this.isTurnNode(child) && !this.isRapidViewOwnedElement(child)
+      ));
     }
 
     getDirectMessageChildren(root) {
-      if (!(root instanceof HTMLElement)) {
+      if (!(root instanceof HTMLElement) || this.isRapidViewOwnedElement(root)) {
         return [];
       }
 
@@ -471,11 +500,13 @@
     }
 
     isDirectMessageItemChild(node) {
-      return this.isVisible(node) && Boolean(this.resolveTurnNodeFromMessageNode(node));
+      return this.isVisible(node)
+        && !this.isRapidViewOwnedElement(node)
+        && Boolean(this.resolveTurnNodeFromMessageNode(node));
     }
 
     resolveTurnNodeFromMessageNode(node) {
-      if (!(node instanceof HTMLElement)) {
+      if (!(node instanceof HTMLElement) || this.isRapidViewOwnedElement(node)) {
         return null;
       }
 
@@ -484,7 +515,7 @@
       }
 
       const turnNodes = Array.from(node.querySelectorAll(this.turnSelector))
-        .filter((candidate) => this.isTurnNode(candidate));
+        .filter((candidate) => this.isTurnNode(candidate) && !this.isRapidViewOwnedElement(candidate));
 
       if (turnNodes.length !== 1) {
         return null;
@@ -494,7 +525,8 @@
     }
 
     findFallbackMessageRoot(main) {
-      const candidates = [main, ...Array.from(main.querySelectorAll("*"))];
+      const candidates = [main, ...Array.from(main.querySelectorAll("*"))]
+        .filter((candidate) => !this.isRapidViewOwnedElement(candidate));
       const thread = main.querySelector("#thread");
       const threadTurnNodes = thread instanceof HTMLElement
         ? Array.from(thread.querySelectorAll(this.turnSelector)).filter((node) => this.isTurnNode(node))
@@ -511,12 +543,18 @@
       let best = null;
 
       for (const candidate of candidates) {
-        if (!this.isVisible(candidate) || candidate.childElementCount < LIMITS.minDetectableMessages) {
+        if (
+          !this.isVisible(candidate)
+          || this.isRapidViewOwnedElement(candidate)
+          || candidate.childElementCount < LIMITS.minDetectableMessages
+        ) {
           this.recordCandidateRejection(summary, "not-visible-or-too-few-children", candidate);
           continue;
         }
 
-        const directChildren = Array.from(candidate.children).filter((child) => this.isVisible(child));
+        const directChildren = Array.from(candidate.children).filter((child) => (
+          this.isVisible(child) && !this.isRapidViewOwnedElement(child)
+        ));
         summary.candidateCount += 1;
 
         if (directChildren.length < LIMITS.minDetectableMessages) {
@@ -661,6 +699,10 @@
         return false;
       }
 
+      if (this.isRapidViewOwnedElement(node)) {
+        return false;
+      }
+
       if (node.tagName !== "SECTION") {
         return false;
       }
@@ -691,6 +733,10 @@
     }
 
     scoreMessageNode(node) {
+      if (!(node instanceof HTMLElement) || this.isRapidViewOwnedElement(node)) {
+        return -10;
+      }
+
       const tagName = node.tagName.toLowerCase();
 
       if (["nav", "aside", "header", "footer", "form"].includes(tagName)) {
@@ -749,6 +795,10 @@
       }
 
       return score;
+    }
+
+    isRapidViewOwnedElement(node) {
+      return Boolean(node instanceof Element && node.closest(RAPID_VIEW_OWNED_UI_SELECTOR));
     }
   }
 
@@ -1551,6 +1601,7 @@
       this.scrollContainer = null;
       this.records = [];
       this.manualArchiveEntries = new Map();
+      this.manualUserRestoredArchiveIds = new Set();
       this.archiveUi = null;
       this.domMutationDepth = 0;
       this.ignoreOwnRootMutationsUntil = 0;
@@ -1632,10 +1683,18 @@
       return Number((performance.now() - startTime).toFixed(1));
     }
 
-    bind({ root, scrollContainer, messageNodes }) {
-      const preserveExistingState = this.root === root && this.scrollContainer === scrollContainer;
+    bind({ root, scrollContainer, messageNodes, preserveManualArchive = true }) {
+      const sameBinding = this.root === root && this.scrollContainer === scrollContainer;
+      const preserveSameBindingState = sameBinding && preserveManualArchive;
+      const preserveManualArchiveAcrossRebind = Boolean(
+        preserveManualArchive
+        && !sameBinding
+        && this.root
+        && this.hasManualArchiveStateToPreserve()
+      );
+      const preserveExistingState = preserveSameBindingState || preserveManualArchiveAcrossRebind;
 
-      if (!preserveExistingState && this.root && this.root !== root) {
+      if (!preserveExistingState && this.root) {
         this.destroy();
       }
 
@@ -1649,12 +1708,13 @@
       this.updateDynamicScrollBinding();
     }
 
-    destroy() {
+    destroy(options = {}) {
+      const restoreHistory = Boolean(options.restoreHistory);
       this.clearDeferredSnapshotTimer();
       this.clearDeferredPlainTextTimer();
       this.resetDynamicScrollTracking(false);
 
-      if (this.root && document.contains(this.root)) {
+      if (restoreHistory && this.root && document.contains(this.root)) {
         this.showEntireHistory();
       } else {
         this.removeArchiveUi();
@@ -1664,6 +1724,7 @@
       this.scrollContainer = null;
       this.records = [];
       this.manualArchiveEntries = new Map();
+      this.manualUserRestoredArchiveIds = new Set();
       this.archiveActive = false;
       this.hiddenCount = 0;
       this.detectedTurnCount = 0;
@@ -1683,12 +1744,72 @@
     }
 
     prepareForDetection() {
-      this.clearDeferredSnapshotTimer();
-      this.clearDeferredPlainTextTimer();
+      if (this.hasManualArchiveStateToPreserve()) {
+        if (!this.deferredPlainTextTimer && this.pendingPlainTextIds.length) {
+          this.scheduleDeferredPlainTextWork(LIMITS.archiveIndexRetryDelayMs);
+        }
+      } else {
+        this.clearDeferredSnapshotTimer();
+        this.clearDeferredPlainTextTimer();
+      }
 
       if (this.archiveUi && this.archiveUi.host && !this.archiveUi.host.isConnected) {
         this.archiveUi = null;
       }
+    }
+
+    shouldPreserveManualArchiveOnInactive() {
+      return this.hasManualArchiveStateToPreserve();
+    }
+
+    hasManualArchiveStateToPreserve(records = this.records) {
+      if (this.settings.dynamicScroll || !this.settings.enabled) {
+        return false;
+      }
+
+      if (
+        this.manualArchiveEntries.size > 0
+        || this.pendingPlainTextIds.length > 0
+        || this.pendingRichSnapshotIds.length > 0
+      ) {
+        return true;
+      }
+
+      return records.some((record) => (
+        record
+        && (
+          record.state === "hidden"
+          || record.state === "visibleArchive"
+          || record.archivePending
+          || record.plainTextPending
+          || record.manualPayloadState === "pending"
+          || this.isPendingManualArchiveRecord(record)
+        )
+      ));
+    }
+
+    hasManualArchiveWindowState(records = this.records) {
+      return this.hasManualArchiveStateToPreserve(records);
+    }
+
+    preserveManualArchiveDuringDetectionFailure() {
+      if (!this.hasManualArchiveStateToPreserve()) {
+        return false;
+      }
+
+      if (!this.settings.dynamicScroll && this.pendingPlainTextIds.length && !this.deferredPlainTextTimer) {
+        this.scheduleDeferredPlainTextWork(LIMITS.archiveIndexRetryDelayMs);
+      }
+
+      if (this.root && document.contains(this.root) && this.scrollContainer) {
+        this.archiveActive = true;
+        this.hiddenCount = this.countHiddenRecords();
+        this.syncArchiveUi();
+        this.updateDynamicScrollBinding();
+        this.emitStatus();
+      }
+
+      return true;
     }
 
     refreshWindow(reason) {
@@ -1704,6 +1825,17 @@
       const shouldArchive = this.settings.enabled && this.computeArchiveModeState();
 
       if (!shouldArchive) {
+        if (this.shouldPreserveManualArchiveOnInactive()) {
+          this.archiveActive = true;
+          this.lastActivationTrigger = this.lastActivationTrigger || this.getActivationTrigger();
+          this.syncManualArchiveEntries();
+          this.hiddenCount = this.countHiddenRecords();
+          this.syncArchiveUi();
+          this.updateDynamicScrollBinding();
+          this.emitStatus();
+          return;
+        }
+
         this.archiveActive = false;
         this.lastActivationTrigger = "";
         this.clearDeferredSnapshotTimer();
@@ -1778,6 +1910,8 @@
             || ((previous.snapshotHtml || previous.richHtml || previous.plainTextFallback) ? "ready" : "empty");
           previous.indexState = previous.indexState
             || ((previous.snapshotHtml || previous.richHtml || previous.plainTextFallback) ? "ready" : "empty");
+          previous.manualPayloadState = previous.manualPayloadState
+            || ((previous.snapshotHtml || previous.richHtml || previous.plainTextFallback) ? "ready" : "empty");
           previous.state = "live";
           previous.keepVisible = false;
           previous.viewMode = previous.viewMode || "simple";
@@ -1818,6 +1952,7 @@
           manualPendingOriginalStyles: [],
           snapshotState: "empty",
           indexState: "empty",
+          manualPayloadState: "empty",
           state: "live",
           keepVisible: false,
           viewMode: "simple"
@@ -1827,8 +1962,8 @@
       this.records = nextRecords;
       this.detectedTurnCount = turnGroups.length;
       this.seedEstimatedHeights();
+      this.syncManualArchiveEntries();
       this.hiddenCount = this.countHiddenRecords();
-      this.syncArchiveUi();
       this.logger.info("rebuild-records", {
         preserveExistingState,
         preservedPrefix: preservedPrefix.length,
@@ -1841,18 +1976,32 @@
       const validIds = new Set(this.records.map((record) => record.id));
 
       for (const entryId of Array.from(this.manualArchiveEntries.keys())) {
-        if (!validIds.has(entryId)) {
+        const entry = this.manualArchiveEntries.get(entryId);
+        if (!validIds.has(entryId) && !this.hasStrictReadyManualArchiveEntry(entry)) {
           this.manualArchiveEntries.delete(entryId);
         }
       }
 
       for (const record of this.records) {
-        const entry = this.manualArchiveEntries.get(record.id);
-        if (!entry) {
-          continue;
+        const existing = this.getManualArchiveEntry(record);
+        const entry = this.ensureManualArchiveEntryForRecord(record);
+        if (entry) {
+          entry.role = record.role;
+          entry.sourceRecordId = record.id;
+          if (entry.visible && !this.isManualUserRestoredArchiveEntry(entry)) {
+            entry.visible = false;
+          }
+          if (record.state === "visibleArchive" && !this.isVisibleManualArchiveEntry(entry)) {
+            record.state = "hidden";
+            record.keepVisible = false;
+          }
+        } else if (record.state === "visibleArchive") {
+          if (existing) {
+            existing.visible = false;
+          }
+          record.state = "hidden";
+          record.keepVisible = false;
         }
-
-        entry.role = record.role;
       }
     }
 
@@ -1927,16 +2076,151 @@
       );
     }
 
+    getManualArchiveEntryId(entryOrId) {
+      if (typeof entryOrId === "string") {
+        return entryOrId;
+      }
+
+      if (entryOrId && typeof entryOrId.id === "string") {
+        return entryOrId.id;
+      }
+
+      return "";
+    }
+
+    isManualUserRestoredArchiveEntry(entryOrId) {
+      const entryId = this.getManualArchiveEntryId(entryOrId);
+      return Boolean(entryId && this.manualUserRestoredArchiveIds.has(entryId));
+    }
+
+    markManualArchiveEntryRestored(entryOrId) {
+      const entryId = this.getManualArchiveEntryId(entryOrId);
+      if (entryId) {
+        this.manualUserRestoredArchiveIds.add(entryId);
+      }
+    }
+
+    unmarkManualArchiveEntryRestored(entryOrId) {
+      const entryId = this.getManualArchiveEntryId(entryOrId);
+      if (entryId) {
+        this.manualUserRestoredArchiveIds.delete(entryId);
+      }
+    }
+
     isVisibleManualArchiveEntry(entry) {
       return Boolean(
         entry
         && entry.visible
+        && this.isManualUserRestoredArchiveEntry(entry)
         && this.hasStrictReadyManualArchiveEntry(entry)
       );
     }
 
     isRestorableManualEntry(entry) {
       return this.hasStrictReadyManualArchiveEntry(entry);
+    }
+
+    hydrateManualArchiveEntryFromRecord(record, existingEntry = null) {
+      if (!record) {
+        return null;
+      }
+
+      const existing = existingEntry || this.getManualArchiveEntry(record);
+      const simpleText = this.hasUsableArchiveText(record.plainTextFallback)
+        ? String(record.plainTextFallback).trim()
+        : (this.hasUsableArchiveText(existing?.simpleText) ? String(existing.simpleText).trim() : "");
+      const cachedSimpleHtml = this.hasStrictArchiveHtml(record.snapshotHtml)
+        ? record.snapshotHtml.trim()
+        : (this.hasStrictArchiveHtml(existing?.simpleHtml) ? existing.simpleHtml.trim() : "");
+      const simpleHtml = cachedSimpleHtml || (simpleText ? this.renderPlainTextHtml(simpleText) : "");
+      const renderedHtml = this.hasStrictArchiveHtml(record.richHtml)
+        ? record.richHtml.trim()
+        : (this.hasStrictArchiveHtml(existing?.renderedHtml) ? existing.renderedHtml.trim() : "");
+      const renderProfile = record.renderProfile && typeof record.renderProfile === "object"
+        ? record.renderProfile
+        : (existing?.renderProfile && typeof existing.renderProfile === "object" ? existing.renderProfile : null);
+
+      if (
+        !this.hasUsableArchiveText(simpleText)
+        && !this.hasStrictArchiveHtml(simpleHtml)
+        && !this.hasStrictArchiveHtml(renderedHtml)
+      ) {
+        return null;
+      }
+
+      const entry = existing || {
+        id: record.id,
+        sourceRecordId: record.id,
+        role: record.role,
+        viewMode: record.viewMode || this.getDefaultArchiveViewMode(),
+        simpleText: "",
+        simpleHtml: "",
+        renderedHtml: "",
+        archiveBlock: null,
+        refreshArchiveBlock: null,
+        simpleExpanded: Boolean(record.simpleExpanded),
+        dynamicAutoExpanded: Boolean(record.dynamicAutoExpanded),
+        renderProfile: null,
+        visible: record.state === "visibleArchive",
+        estimatedHeight: 0
+      };
+
+      entry.id = record.id;
+      entry.sourceRecordId = record.id;
+      entry.role = record.role;
+      entry.viewMode = entry.viewMode || record.viewMode || this.getDefaultArchiveViewMode();
+      entry.simpleText = this.hasUsableArchiveText(simpleText) ? simpleText : "";
+      entry.simpleHtml = this.hasStrictArchiveHtml(simpleHtml)
+        ? simpleHtml
+        : (entry.simpleText ? this.renderPlainTextHtml(entry.simpleText) : "");
+      entry.renderedHtml = this.hasStrictArchiveHtml(renderedHtml) ? renderedHtml : "";
+      entry.renderProfile = renderProfile || null;
+      entry.simpleExpanded = Boolean(existing?.simpleExpanded || record.simpleExpanded);
+      entry.dynamicAutoExpanded = Boolean(existing?.dynamicAutoExpanded || record.dynamicAutoExpanded);
+      entry.visible = this.isManualUserRestoredArchiveEntry(entry)
+        && (existing ? Boolean(existing.visible) : record.state === "visibleArchive");
+      entry.estimatedHeight = Math.max(existing?.estimatedHeight || 0, record.estimatedHeight || 0);
+      entry.manualPayloadState = "ready";
+
+      if (entry.simpleText) {
+        record.plainTextFallback = entry.simpleText;
+      }
+      if (entry.simpleHtml) {
+        record.snapshotHtml = entry.simpleHtml;
+      }
+      if (entry.renderedHtml) {
+        record.richHtml = entry.renderedHtml;
+      }
+      if (entry.renderProfile) {
+        record.renderProfile = entry.renderProfile;
+      }
+
+      record.snapshotState = "ready";
+      record.indexState = "ready";
+      record.manualPayloadState = "ready";
+      this.manualArchiveEntries.set(record.id, entry);
+      return entry;
+    }
+
+    ensureManualArchiveEntryForRecord(record) {
+      if (!record) {
+        return null;
+      }
+
+      const entry = this.getManualArchiveEntry(record);
+      if (this.hasStrictReadyManualArchiveEntry(entry)) {
+        return entry;
+      }
+
+      return this.hydrateManualArchiveEntryFromRecord(record, entry);
+    }
+
+    isRenderableManualArchiveRecord(record) {
+      if (!record || record.state !== "visibleArchive") {
+        return false;
+      }
+
+      return this.isVisibleManualArchiveEntry(this.ensureManualArchiveEntryForRecord(record));
     }
 
     getVisibleManualArchiveEntries() {
@@ -1947,9 +2231,16 @@
           continue;
         }
 
-        const entry = this.getManualArchiveEntry(record);
+        const existing = this.getManualArchiveEntry(record);
+        const entry = this.ensureManualArchiveEntryForRecord(record);
         if (this.isVisibleManualArchiveEntry(entry)) {
           entries.push(entry);
+        } else {
+          if (existing) {
+            existing.visible = false;
+          }
+          record.state = "hidden";
+          record.keepVisible = false;
         }
       }
 
@@ -2057,7 +2348,7 @@
       entry.renderedHtml = this.hasStrictArchiveHtml(renderedHtml) ? renderedHtml : "";
       entry.renderProfile = renderProfile || null;
       const entryReady = this.hasStrictReadyManualArchiveEntry(entry);
-      entry.visible = Boolean(existing?.visible);
+      entry.visible = Boolean(existing?.visible) && this.isManualUserRestoredArchiveEntry(entry);
       entry.estimatedHeight = Math.max(existing?.estimatedHeight || 0, record.estimatedHeight || 0);
       entry.manualPayloadState = entryReady ? "ready" : "pending";
 
@@ -2150,33 +2441,57 @@
         }
 
         if (matchCount >= requiredMatchCount) {
-          return previousRecords.slice(0, startIndex).map((record) => {
-            record.nodes = [];
-            record.node = null;
-            record.detachedSourceNodes = Array.isArray(record.detachedSourceNodes)
-              ? record.detachedSourceNodes
-              : [];
-            record.detachedSourceNode = record.detachedSourceNode || null;
-            record.snapshotState = record.snapshotState || ((record.snapshotHtml || record.richHtml || record.plainTextFallback) ? "ready" : "empty");
-            record.state = record.state === "visibleArchive" ? "visibleArchive" : "hidden";
-            record.keepVisible = Boolean(record.keepVisible);
-            record.viewMode = record.viewMode || "simple";
-            record.simplePreviewMeasureQueued = Boolean(record.simplePreviewMeasureQueued);
-            record.dynamicAutoExpanded = Boolean(record.dynamicAutoExpanded);
-            record.dynamicBaseHeight = record.dynamicBaseHeight || 0;
-            record.trackHeightPx = record.trackHeightPx || record.dynamicBaseHeight || record.estimatedHeight || 0;
-            record.trackTopPx = record.trackTopPx || 0;
-            record.dynamicTrackHeightPx = record.dynamicTrackHeightPx || 0;
-            record.dynamicTrackTopPx = record.dynamicTrackTopPx || 0;
-            record.dynamicChromeHeightPx = record.dynamicChromeHeightPx || 0;
-            record.dynamicUnits = Array.isArray(record.dynamicUnits) ? record.dynamicUnits : [];
-            record.dynamicRenderedHeight = record.dynamicRenderedHeight || 0;
-            return record;
-          });
+          return previousRecords.slice(0, startIndex)
+            .map((record) => this.normalizePreservedManualRecord(record));
         }
       }
 
+      if (!this.hasManualArchiveWindowState(previousRecords)) {
+        return [];
+      }
+
+      const detectedIdSet = new Set(detectedIds);
+      const firstOverlapIndex = previousRecords.findIndex((record) => detectedIdSet.has(record.id));
+      if (firstOverlapIndex > 0) {
+        return previousRecords.slice(0, firstOverlapIndex)
+          .map((record) => this.normalizePreservedManualRecord(record));
+      }
+
+      const maxTransientDetectedCount = Math.max(2, this.getManualLiveTurnCount() + 2);
+      if (firstOverlapIndex < 0 && detectedIds.length <= maxTransientDetectedCount) {
+        return previousRecords.map((record) => this.normalizePreservedManualRecord(record));
+      }
+
       return [];
+    }
+
+    normalizePreservedManualRecord(record) {
+      record.nodes = [];
+      record.node = null;
+      record.detachedSourceNodes = Array.isArray(record.detachedSourceNodes)
+        ? record.detachedSourceNodes
+        : [];
+      record.detachedSourceNode = record.detachedSourceNode || null;
+      record.renderProfile = record.renderProfile && typeof record.renderProfile === "object"
+        ? record.renderProfile
+        : null;
+      record.snapshotState = record.snapshotState || ((record.snapshotHtml || record.richHtml || record.plainTextFallback) ? "ready" : "empty");
+      record.indexState = record.indexState || record.snapshotState;
+      record.manualPayloadState = record.manualPayloadState || record.snapshotState;
+      record.state = record.state === "visibleArchive" ? "visibleArchive" : "hidden";
+      record.keepVisible = Boolean(record.keepVisible);
+      record.viewMode = record.viewMode || "simple";
+      record.simplePreviewMeasureQueued = Boolean(record.simplePreviewMeasureQueued);
+      record.dynamicAutoExpanded = Boolean(record.dynamicAutoExpanded);
+      record.dynamicBaseHeight = record.dynamicBaseHeight || 0;
+      record.trackHeightPx = record.trackHeightPx || record.dynamicBaseHeight || record.estimatedHeight || 0;
+      record.trackTopPx = record.trackTopPx || 0;
+      record.dynamicTrackHeightPx = record.dynamicTrackHeightPx || 0;
+      record.dynamicTrackTopPx = record.dynamicTrackTopPx || 0;
+      record.dynamicChromeHeightPx = record.dynamicChromeHeightPx || 0;
+      record.dynamicUnits = Array.isArray(record.dynamicUnits) ? record.dynamicUnits : [];
+      record.dynamicRenderedHeight = record.dynamicRenderedHeight || 0;
+      return record;
     }
 
     groupMessageNodesIntoTurns(messageNodes) {
@@ -2189,11 +2504,15 @@
       let currentGroup = null;
 
       for (const node of messageNodes) {
-        if (!(node instanceof HTMLElement)) {
+        if (!(node instanceof HTMLElement) || this.isRapidViewOwnedElement(node)) {
           continue;
         }
 
         const baseId = this.getNodeId(node);
+        if (!baseId) {
+          continue;
+        }
+
         const role = this.getNodeRole(node);
 
         if (currentGroup && currentGroup.baseId === baseId && currentGroup.role === role) {
@@ -2217,6 +2536,10 @@
     }
 
     getNodeId(node) {
+      if (!(node instanceof HTMLElement) || this.isRapidViewOwnedElement(node)) {
+        return "";
+      }
+
       const turnNode = this.resolveTurnNodeFromMessageNode(node);
       const turnId = turnNode instanceof HTMLElement
         ? turnNode.getAttribute("data-turn-id")
@@ -2248,7 +2571,7 @@
     }
 
     resolveTurnNodeFromMessageNode(node) {
-      if (!(node instanceof HTMLElement)) {
+      if (!(node instanceof HTMLElement) || this.isRapidViewOwnedElement(node)) {
         return null;
       }
 
@@ -2257,7 +2580,7 @@
       }
 
       const turnNodes = Array.from(node.querySelectorAll(TURN_SELECTOR))
-        .filter((candidate) => this.isTurnNode(candidate));
+        .filter((candidate) => this.isTurnNode(candidate) && !this.isRapidViewOwnedElement(candidate));
 
       if (turnNodes.length !== 1) {
         return null;
@@ -2268,6 +2591,10 @@
 
     isTurnNode(node) {
       if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+
+      if (this.isRapidViewOwnedElement(node)) {
         return false;
       }
 
@@ -2287,6 +2614,10 @@
       const turnRole = node.getAttribute("data-turn");
       const testId = node.getAttribute("data-testid") || "";
       return Boolean(turnId) && (turnRole === "user" || turnRole === "assistant") && testId.startsWith("conversation-turn-");
+    }
+
+    isRapidViewOwnedElement(node) {
+      return Boolean(node instanceof Element && node.closest(RAPID_VIEW_OWNED_UI_SELECTOR));
     }
 
     getRecordLiveNodes(record) {
@@ -2692,10 +3023,11 @@
                 readyEntry.estimatedHeight = Math.max(readyEntry.estimatedHeight || 0, record.estimatedHeight || 0);
               }
 
-              readyEntry.visible = Boolean(readyEntry.visible);
+              const keepVisible = Boolean(readyEntry.visible) && this.isManualUserRestoredArchiveEntry(readyEntry);
+              readyEntry.visible = keepVisible;
               readyEntry.viewMode = readyEntry.viewMode || this.getDefaultArchiveViewMode();
-              record.state = readyEntry.visible ? "visibleArchive" : "hidden";
-              record.keepVisible = readyEntry.visible;
+              record.state = keepVisible ? "visibleArchive" : "hidden";
+              record.keepVisible = keepVisible;
 
               if (liveNodes.length) {
                 this.removeRecordLiveNodes(record);
@@ -3035,7 +3367,7 @@
               });
             }
 
-            if (entry && entry.visible && typeof entry.refreshArchiveBlock === "function") {
+            if (this.isVisibleManualArchiveEntry(entry) && typeof entry.refreshArchiveBlock === "function") {
               entry.refreshArchiveBlock();
               refreshedBlocks += 1;
             }
@@ -5020,12 +5352,20 @@
         return;
       }
 
+      this.syncManualArchiveEntries();
       this.hiddenCount = this.countHiddenRecords();
       this.dynamicVisibleCount = 0;
       const visibleArchiveRecords = this.getVisibleManualArchiveEntries();
+      this.hiddenCount = this.countHiddenRecords();
       const pendingManualArchiveCount = this.countPendingManualArchiveRecords();
+      const preserveManualArchiveState = this.hasManualArchiveStateToPreserve();
 
-      if (!this.hiddenCount && !visibleArchiveRecords.length && !pendingManualArchiveCount) {
+      if (
+        !this.hiddenCount
+        && !visibleArchiveRecords.length
+        && !pendingManualArchiveCount
+        && !preserveManualArchiveState
+      ) {
         this.removeArchiveUi();
         return;
       }
@@ -5037,9 +5377,10 @@
       archiveUi.list.style.minHeight = "";
       archiveUi.list.style.gap = "12px";
       const renderState = this.getArchiveRenderState(visibleArchiveRecords);
-      this.updateArchiveUiChrome(archiveUi, visibleArchiveRecords.length);
-
-      const archiveBlocks = renderState.records.map((record) => this.createArchiveBlock(record));
+      const archiveBlocks = renderState.records
+        .map((record) => this.createArchiveBlock(record))
+        .filter((block) => block instanceof HTMLElement);
+      this.updateArchiveUiChrome(archiveUi, archiveBlocks.length);
       archiveUi.topSpacer.style.height = `${Math.max(0, Math.round(renderState.topHeight))}px`;
       archiveUi.bottomSpacer.style.height = `${Math.max(0, Math.round(renderState.bottomHeight))}px`;
       archiveUi.list.replaceChildren(archiveUi.topSpacer, ...archiveBlocks, archiveUi.bottomSpacer);
@@ -5055,7 +5396,7 @@
       this.logger.info("sync-archive-ui", {
         durationMs: this.getDurationMs(startedAt),
         visibleArchiveCount: visibleArchiveRecords.length,
-        renderedArchiveCount: renderState.records.length,
+        renderedArchiveCount: archiveBlocks.length,
         hiddenCount: this.hiddenCount,
         pendingManualArchiveCount
       });
@@ -6427,11 +6768,21 @@
         return;
       }
 
+      const renderableRecords = recordsToInsert.filter((record) => (
+        this.settings.dynamicScroll || this.isVisibleManualArchiveEntry(record)
+      ));
+
+      if (!renderableRecords.length) {
+        this.syncArchiveUi();
+        return;
+      }
+
       const startedAt = performance.now();
       const archiveUi = this.ensureArchiveUi();
       const fragment = document.createDocumentFragment();
+      let insertedCount = 0;
 
-      for (const record of recordsToInsert) {
+      for (const record of renderableRecords) {
         const recordStartedAt = performance.now();
         const isManualEntry = this.isManualArchiveEntry(record);
         this.logger.info("archive-block:create:start", {
@@ -6443,11 +6794,22 @@
           hasManualRenderedHtml: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : undefined,
           viewMode: record.viewMode
         });
-        fragment.appendChild(this.createArchiveBlock(record));
+        const block = this.createArchiveBlock(record);
+        if (!(block instanceof HTMLElement)) {
+          continue;
+        }
+
+        fragment.appendChild(block);
+        insertedCount += 1;
         this.logger.info("archive-block:create:end", {
           id: record.id,
           durationMs: this.getDurationMs(recordStartedAt)
         });
+      }
+
+      if (!insertedCount) {
+        this.syncArchiveUi();
+        return;
       }
 
       archiveUi.list.insertBefore(fragment, archiveUi.list.firstChild);
@@ -6455,7 +6817,7 @@
       this.mountArchiveUiHost(archiveUi);
       this.logger.info("insert-visible-archive-records", {
         durationMs: this.getDurationMs(startedAt),
-        insertedCount: recordsToInsert.length,
+        insertedCount,
         totalVisibleArchiveCount: this.countVisibleArchiveRecords()
       });
     }
@@ -6477,12 +6839,19 @@
     }
 
     createArchiveBlock(record) {
+      if (!record) {
+        return null;
+      }
+
+      const isManualEntry = this.isManualArchiveEntry(record);
+      if (!this.settings.dynamicScroll && (!isManualEntry || !this.isVisibleManualArchiveEntry(record))) {
+        return null;
+      }
+
       if (record.archiveBlock instanceof HTMLElement && typeof record.refreshArchiveBlock === "function") {
         record.refreshArchiveBlock();
         return record.archiveBlock;
       }
-
-      const isManualEntry = this.isManualArchiveEntry(record);
 
       const article = document.createElement("article");
       const header = document.createElement("div");
@@ -7673,6 +8042,7 @@
       for (const record of this.records) {
         const entry = this.getManualArchiveEntry(record);
         if (this.hasStrictReadyManualArchiveEntry(entry)) {
+          this.markManualArchiveEntryRestored(entry);
           entry.visible = true;
           entry.viewMode = entry.viewMode || this.getDefaultArchiveViewMode();
           record.state = "visibleArchive";
@@ -7694,6 +8064,8 @@
     }
 
     prepareDefaultLoadMoreState() {
+      this.manualUserRestoredArchiveIds.clear();
+
       if (this.settings.dynamicScroll) {
         const liveTurnCount = Math.min(this.records.length, this.settings.liveTurnCount);
         const firstLiveIndex = Math.max(0, this.records.length - liveTurnCount);
@@ -7830,6 +8202,7 @@
         const entry = this.getManualArchiveEntry(record);
 
         if (record && this.hasStrictReadyManualArchiveEntry(entry)) {
+          this.markManualArchiveEntryRestored(entry);
           entry.visible = true;
           entry.simpleExpanded = false;
           entry.dynamicAutoExpanded = false;
@@ -7894,6 +8267,7 @@
         return;
       }
 
+      this.manualUserRestoredArchiveIds.clear();
       this.resetDynamicScrollTracking(false);
       const firstLiveNode = this.getManualArchiveInsertionNode();
       const beforeTop = firstLiveNode ? firstLiveNode.getBoundingClientRect().top : 0;
@@ -7902,6 +8276,7 @@
         if (record.state === "visibleArchive") {
           const entry = this.getManualArchiveEntry(record);
           if (entry) {
+            this.unmarkManualArchiveEntryRestored(entry);
             entry.visible = false;
           }
           record.state = "hidden";
@@ -7944,6 +8319,7 @@
         if (record && record.state === "visibleArchive") {
           const entry = this.getManualArchiveEntry(record);
           if (entry) {
+            this.unmarkManualArchiveEntryRestored(entry);
             entry.visible = false;
           }
           record.state = "hidden";
@@ -7984,6 +8360,7 @@
       for (const record of this.records) {
         const entry = this.getManualArchiveEntry(record);
         if (this.hasStrictReadyManualArchiveEntry(entry)) {
+          this.markManualArchiveEntryRestored(entry);
           entry.visible = true;
           entry.simpleExpanded = false;
           entry.dynamicAutoExpanded = false;
@@ -8536,7 +8913,7 @@
         if (wasEnabled && !nextSettings.enabled) {
           this.disconnectBodyObserver();
           this.disconnectRootObserver();
-          this.engine.destroy();
+          this.engine.destroy({ restoreHistory: true });
           this.updateStatus({
             state: STATUS.disabled,
             reason: "Extension disabled in popup."
@@ -8623,6 +9000,28 @@
         && this.detector.isVisible(node)
       ));
       return visibleAuthorMarkers.length >= 2;
+    }
+
+    shouldPreserveManualArchiveOnDetectionFailure({
+      reason,
+      recognizedConversationRoute,
+      hasConversationEvidence,
+      threadVisible
+    }) {
+      if (reason === "route-change") {
+        return false;
+      }
+
+      return Boolean(
+        this.engine
+        && typeof this.engine.hasManualArchiveStateToPreserve === "function"
+        && this.engine.hasManualArchiveStateToPreserve()
+        && (
+          recognizedConversationRoute
+          || hasConversationEvidence
+          || threadVisible
+        )
+      );
     }
 
     startObservers() {
@@ -8739,7 +9138,7 @@
         this.cachedMain = null;
         this.disconnectBodyObserver();
         this.disconnectRootObserver();
-        this.engine.destroy();
+        this.engine.destroy({ restoreHistory: true });
         this.updateStatus({
           state: STATUS.disabled,
           reason: "Extension disabled in popup."
@@ -8837,6 +9236,29 @@
           return;
         }
 
+        if (this.shouldPreserveManualArchiveOnDetectionFailure({
+          reason,
+          recognizedConversationRoute,
+          hasConversationEvidence,
+          threadVisible
+        })) {
+          this.forceImmediateBootstrap = false;
+          this.bootstrapDeadline = 0;
+          this.bootstrapStartedAt = 0;
+          this.observeForBootstrap();
+          this.engine.preserveManualArchiveDuringDetectionFailure();
+          this.updateStatus({
+            state: STATUS.searching,
+            reason: waitingForStructuralResolution
+              ? "Waiting for stable ChatGPT conversation structure..."
+              : waitingForThreadHydration
+                ? "Waiting for ChatGPT conversation turns to appear..."
+                : "Waiting for ChatGPT thread to appear..."
+          });
+          this.scheduleInitialize("manual-archive-preserve-retry", LIMITS.bootstrapRetryMs);
+          return;
+        }
+
         this.forceImmediateBootstrap = false;
         this.bootstrapDeadline = 0;
         this.bootstrapStartedAt = 0;
@@ -8860,7 +9282,8 @@
       this.engine.bind({
         root: detection.root,
         scrollContainer: detection.scrollContainer,
-        messageNodes: detection.messageNodes
+        messageNodes: detection.messageNodes,
+        preserveManualArchive: reason !== "route-change"
       });
 
       this.disconnectBodyObserver();
