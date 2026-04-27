@@ -5902,13 +5902,14 @@
       archiveUi.list.style.minHeight = "";
       archiveUi.list.style.gap = "12px";
       const renderState = this.getArchiveRenderState(visibleArchiveRecords);
-      const archiveBlocks = renderState.records
-        .map((record) => this.createArchiveBlock(record))
-        .filter((block) => block instanceof HTMLElement);
-      this.updateArchiveUiChrome(archiveUi, archiveBlocks.length);
+      const archiveRender = this.buildManualArchiveRenderNodes(renderState.records, {
+        doc: archiveUi.list.ownerDocument || document
+      });
+
+      this.updateArchiveUiChrome(archiveUi, archiveRender.blocks.length);
       archiveUi.topSpacer.style.height = `${Math.max(0, Math.round(renderState.topHeight))}px`;
       archiveUi.bottomSpacer.style.height = `${Math.max(0, Math.round(renderState.bottomHeight))}px`;
-      archiveUi.list.replaceChildren(archiveUi.topSpacer, ...archiveBlocks, archiveUi.bottomSpacer);
+      archiveUi.list.replaceChildren(archiveUi.topSpacer, ...archiveRender.nodes, archiveUi.bottomSpacer);
 
       this.mountArchiveUiHost(archiveUi);
 
@@ -5921,7 +5922,7 @@
       this.logger.info("sync-archive-ui", {
         durationMs: this.getDurationMs(startedAt),
         visibleArchiveCount: visibleArchiveRecords.length,
-        renderedArchiveCount: archiveBlocks.length,
+        renderedArchiveCount: archiveRender.blocks.length,
         hiddenCount: this.hiddenCount,
         pendingManualArchiveCount
       });
@@ -6707,6 +6708,7 @@
         windowHost.appendChild(slot);
       }
 
+      this.appendDynamicTurnPairBridges(windowHost, renderState);
       readerHost.appendChild(windowHost);
       return readerHost;
     }
@@ -6732,6 +6734,122 @@
         topHeight: 0,
         bottomHeight: 0
       };
+    }
+
+    buildManualArchiveRenderNodes(records, options = {}) {
+      const doc = options.doc || document;
+      const nextRecord = options.nextRecord || null;
+      const beforeCreate = typeof options.beforeCreate === "function" ? options.beforeCreate : null;
+      const afterCreate = typeof options.afterCreate === "function" ? options.afterCreate : null;
+      const items = [];
+      const nodes = [];
+      const blocks = [];
+
+      for (const record of (Array.isArray(records) ? records : [])) {
+        const createContext = beforeCreate ? beforeCreate(record) : null;
+        const block = this.createArchiveBlock(record);
+        if (afterCreate) {
+          afterCreate(record, createContext, block);
+        }
+        if (block instanceof HTMLElement) {
+          items.push({
+            record,
+            block
+          });
+        }
+      }
+
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        const nextItem = items[index + 1] || null;
+        const pairCandidate = nextItem ? nextItem.record : nextRecord;
+        nodes.push(item.block);
+        blocks.push(item.block);
+        if (pairCandidate && this.isArchiveTurnPair(item.record, pairCandidate)) {
+          nodes.push(this.createArchiveTurnPairBridgeElement(doc));
+        }
+      }
+
+      return {
+        nodes,
+        blocks,
+        records: items.map((item) => item.record)
+      };
+    }
+
+    isArchiveTurnPair(previousRecord, currentRecord) {
+      return Boolean(
+        previousRecord
+        && currentRecord
+        && previousRecord.role === "user"
+        && currentRecord.role === "assistant"
+      );
+    }
+
+    appendDynamicTurnPairBridges(windowHost, renderState) {
+      if (!(windowHost instanceof HTMLElement) || !renderState || !Array.isArray(renderState.visibleEntries)) {
+        return;
+      }
+
+      const bridgeHeight = this.getArchiveTurnPairBridgeHeightPx();
+      for (let index = 1; index < renderState.visibleEntries.length; index += 1) {
+        const previousEntry = renderState.visibleEntries[index - 1];
+        const currentEntry = renderState.visibleEntries[index];
+        if (!this.isArchiveTurnPair(previousEntry?.record, currentEntry?.record)) {
+          continue;
+        }
+
+        const pairGapPx = Math.max(0, this.getDynamicRecordGapPx(previousEntry.record));
+        const centerY = (currentEntry.top - renderState.windowStartY) - (pairGapPx / 2);
+        const topPx = Math.max(
+          -bridgeHeight,
+          Math.min(renderState.windowHeight, centerY - (bridgeHeight / 2))
+        );
+
+        windowHost.appendChild(this.createArchiveTurnPairBridgeElement(windowHost.ownerDocument || document, {
+          dynamic: true,
+          topPx
+        }));
+      }
+    }
+
+    getArchiveTurnPairBridgeHeightPx() {
+      return 14;
+    }
+
+    createArchiveTurnPairBridgeElement(doc, options = {}) {
+      const bridge = doc.createElement("div");
+      const isDynamic = Boolean(options.dynamic);
+
+      bridge.setAttribute("data-rapid-view-for-chatgpt-turn-bridge", "true");
+      bridge.setAttribute("aria-hidden", "true");
+      Object.assign(bridge.style, {
+        width: "min(88%, 680px)",
+        height: `${this.getArchiveTurnPairBridgeHeightPx()}px`,
+        border: "1px solid rgba(96, 121, 166, 0.24)",
+        borderRadius: "12px",
+        background: "linear-gradient(180deg, rgba(231, 238, 248, 0.99), rgba(210, 222, 240, 0.98))",
+        boxShadow: "inset 0 1px 0 rgba(255, 255, 255, 0.64), inset 0 -1px 0 rgba(95, 119, 160, 0.08), 0 8px 18px rgba(45, 66, 100, 0.07)",
+        boxSizing: "border-box",
+        pointerEvents: "none"
+      });
+
+      if (isDynamic) {
+        Object.assign(bridge.style, {
+          position: "absolute",
+          left: "50%",
+          top: `${Math.round(Number(options.topPx) || 0)}px`,
+          transform: "translateX(-50%)",
+          zIndex: "2"
+        });
+      } else {
+        Object.assign(bridge.style, {
+          flex: "0 0 auto",
+          margin: "-13px auto"
+        });
+      }
+
+      return bridge;
     }
 
     getDynamicArchivedRecords() {
@@ -7460,40 +7578,46 @@
 
       const startedAt = performance.now();
       const archiveUi = this.ensureArchiveUi();
-      const fragment = document.createDocumentFragment();
-      let insertedCount = 0;
+      const insertionReference = this.getManualArchivePrependReference(archiveUi);
+      const nextVisibleRecord = this.getManualArchiveRecordForNode(insertionReference);
 
-      for (const record of renderableRecords) {
-        const recordStartedAt = performance.now();
-        const isManualEntry = this.isManualArchiveEntry(record);
-        this.logger.info("archive-block:create:start", {
-          id: record.id,
-          role: record.role,
-          hasPlainText: isManualEntry ? this.hasUsableArchiveText(record.simpleText) : this.hasUsableArchiveText(record.plainTextFallback),
-          hasRich: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : this.hasStrictArchiveHtml(record.richHtml),
-          hasManualSimpleHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : undefined,
-          hasManualRenderedHtml: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : undefined,
-          viewMode: record.viewMode
-        });
-        const block = this.createArchiveBlock(record);
-        if (!(block instanceof HTMLElement)) {
-          continue;
+      const archiveRender = this.buildManualArchiveRenderNodes(renderableRecords, {
+        doc: archiveUi.list.ownerDocument || document,
+        nextRecord: nextVisibleRecord,
+        beforeCreate: (record) => {
+          const recordStartedAt = performance.now();
+          const isManualEntry = this.isManualArchiveEntry(record);
+          this.logger.info("archive-block:create:start", {
+            id: record.id,
+            role: record.role,
+            hasPlainText: isManualEntry ? this.hasUsableArchiveText(record.simpleText) : this.hasUsableArchiveText(record.plainTextFallback),
+            hasRich: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : this.hasStrictArchiveHtml(record.richHtml),
+            hasManualSimpleHtml: isManualEntry ? this.hasStrictArchiveHtml(record.simpleHtml) : undefined,
+            hasManualRenderedHtml: isManualEntry ? this.hasStrictArchiveHtml(record.renderedHtml) : undefined,
+            viewMode: record.viewMode
+          });
+          return recordStartedAt;
+        },
+        afterCreate: (record, recordStartedAt) => {
+          this.logger.info("archive-block:create:end", {
+            id: record.id,
+            durationMs: this.getDurationMs(recordStartedAt || performance.now())
+          });
         }
-
-        fragment.appendChild(block);
-        insertedCount += 1;
-        this.logger.info("archive-block:create:end", {
-          id: record.id,
-          durationMs: this.getDurationMs(recordStartedAt)
-        });
-      }
+      });
+      const insertedCount = archiveRender.blocks.length;
 
       if (!insertedCount) {
         this.syncArchiveUi();
         return;
       }
 
-      archiveUi.list.insertBefore(fragment, archiveUi.list.firstChild);
+      const fragment = document.createDocumentFragment();
+      for (const node of archiveRender.nodes) {
+        fragment.appendChild(node);
+      }
+
+      archiveUi.list.insertBefore(fragment, insertionReference);
       this.updateArchiveUiChrome(archiveUi, this.countVisibleArchiveRecords());
       this.mountArchiveUiHost(archiveUi);
       this.logger.info("insert-visible-archive-records", {
@@ -7501,6 +7625,36 @@
         insertedCount,
         totalVisibleArchiveCount: this.countVisibleArchiveRecords()
       });
+    }
+
+    getManualArchivePrependReference(archiveUi) {
+      if (!archiveUi || !(archiveUi.list instanceof HTMLElement)) {
+        return null;
+      }
+
+      if (archiveUi.topSpacer && archiveUi.topSpacer.parentElement === archiveUi.list) {
+        return archiveUi.topSpacer.nextSibling || archiveUi.bottomSpacer || null;
+      }
+
+      return archiveUi.list.firstChild || null;
+    }
+
+    getManualArchiveRecordForNode(node) {
+      if (!(node instanceof HTMLElement)) {
+        return null;
+      }
+
+      if (!node.hasAttribute("data-rapid-view-for-chatgpt-archive-block")) {
+        return null;
+      }
+
+      for (const entry of this.manualArchiveEntries.values()) {
+        if (entry && entry.archiveBlock === node) {
+          return entry;
+        }
+      }
+
+      return null;
     }
 
     removeArchiveUi() {
