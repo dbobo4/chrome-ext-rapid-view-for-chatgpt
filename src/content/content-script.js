@@ -3900,24 +3900,389 @@
         return [];
       }
 
-      return Array.from(source.querySelectorAll("pre")).map((pre) => ({
-        text: this.extractCodeText(pre),
-        html: this.extractCodeHtml(pre),
-        language: this.detectCodeLanguage(pre)
-      })).filter((block) => block.text);
+      return Array.from(source.querySelectorAll("pre"))
+        .map((pre) => this.buildSourceCodeBlockDescriptor(pre, source))
+        .filter((block) => block.text);
     }
 
-    extractCodeText(pre) {
+    buildSourceCodeBlockDescriptor(pre, source) {
+      const parts = this.buildCodeBlockParts(pre, source);
+      const text = this.removeDuplicatedStructuralCodeLanguageLine(
+        this.extractCodeText(parts.contentRoot, parts.omittedNodes),
+        parts.language
+      );
+
+      return {
+        text,
+        html: this.extractCodeHtml(parts.contentRoot, parts.omittedNodes),
+        language: parts.language
+      };
+    }
+
+    buildCodeBlockParts(pre, source) {
+      const contentRoot = this.getCodeBlockContentRoot(pre);
+      const host = source instanceof Element ? this.findCodeBlockHost(pre, source) : pre;
+      const hostHeader = this.findHostCodeLanguageHeader(host, contentRoot || pre);
+      const embeddedHeader = this.findEmbeddedCodeLanguageHeader(contentRoot);
+      const omittedNodes = new Set();
+
+      if (hostHeader && hostHeader.element) {
+        omittedNodes.add(hostHeader.element);
+      }
+
+      if (embeddedHeader && embeddedHeader.element) {
+        omittedNodes.add(embeddedHeader.element);
+      }
+
+      const languageHint = (
+        (hostHeader && hostHeader.label)
+        || (embeddedHeader && embeddedHeader.label)
+        || ""
+      );
+
+      return {
+        host,
+        contentRoot,
+        omittedNodes,
+        language: this.detectCodeLanguage(pre, source, contentRoot, languageHint)
+      };
+    }
+
+    getCodeBlockContentRoot(pre) {
       if (!(pre instanceof Element)) {
+        return null;
+      }
+
+      return pre.querySelector("code") || pre;
+    }
+
+    findHostCodeLanguageHeader(host, contentRoot) {
+      if (!(host instanceof Element)) {
+        return null;
+      }
+
+      for (const element of host.querySelectorAll("div, span")) {
+        if (!this.isHostCodeLanguageElement(element, host, contentRoot)) {
+          continue;
+        }
+
+        const label = this.normalizeCodeLanguageLabel(element.textContent || "");
+        const omittedElement = this.getHostCodeHeaderOmitElement(element, host, contentRoot);
+        return { element: omittedElement, label };
+      }
+
+      return null;
+    }
+
+    isHostCodeLanguageElement(element, host, contentRoot) {
+      if (!(element instanceof Element) || this.shouldOmitCodeExtractionNode(element)) {
+        return false;
+      }
+
+      if (element.querySelector("pre, code") || element.contains(contentRoot)) {
+        return false;
+      }
+
+      if (contentRoot instanceof Element && contentRoot.contains(element)) {
+        return false;
+      }
+
+      if (!this.isElementBeforeCodeContent(element, contentRoot)) {
+        return false;
+      }
+
+      if (!this.normalizeCodeLanguageLabel(element.textContent || "")) {
+        return false;
+      }
+
+      return this.hasCodeLanguageChrome(element, host, contentRoot);
+    }
+
+    isElementBeforeCodeContent(element, contentRoot) {
+      if (!(element instanceof Element) || !(contentRoot instanceof Element) || element === contentRoot) {
+        return false;
+      }
+
+      const position = element.compareDocumentPosition(contentRoot);
+      return Boolean(position & Node.DOCUMENT_POSITION_FOLLOWING);
+    }
+
+    hasCodeLanguageChrome(element, host, contentRoot) {
+      if (!(element instanceof Element)) {
+        return false;
+      }
+
+      if (element.querySelector("svg")) {
+        return true;
+      }
+
+      let current = element.parentElement;
+      while (current && current !== host) {
+        if (contentRoot instanceof Element && current.contains(contentRoot)) {
+          break;
+        }
+
+        if (current.querySelector("svg") && this.hasLikelyCodeCopyControl(current)) {
+          return true;
+        }
+
+        if (this.hasLikelyCodeCopyControl(current) && !this.extractInlineCodeText(current, new Set([element])).trim()) {
+          return true;
+        }
+
+        current = current.parentElement;
+      }
+
+      return false;
+    }
+
+    hasLikelyCodeCopyControl(root) {
+      if (!(root instanceof Element)) {
+        return false;
+      }
+
+      return Array.from(root.querySelectorAll("button")).some((button) => {
+        const label = [
+          button.textContent,
+          button.getAttribute("aria-label"),
+          button.getAttribute("title"),
+          button.getAttribute("data-testid")
+        ].join(" ");
+
+        return /copy/i.test(label);
+      });
+    }
+
+    getHostCodeHeaderOmitElement(element, host, contentRoot) {
+      let omittedElement = element;
+      let current = element.parentElement;
+
+      while (current && current !== host) {
+        if (contentRoot instanceof Element && current.contains(contentRoot)) {
+          break;
+        }
+
+        if (current.querySelector("pre, code")) {
+          break;
+        }
+
+        if (this.extractInlineCodeText(current, new Set([omittedElement])).trim()) {
+          break;
+        }
+
+        omittedElement = current;
+        current = current.parentElement;
+      }
+
+      return omittedElement;
+    }
+
+    findEmbeddedCodeLanguageHeader(contentRoot) {
+      if (!(contentRoot instanceof Element)) {
+        return null;
+      }
+
+      const element = this.findLeadingEmbeddedCodeLanguageHeaderElement(contentRoot, contentRoot);
+      if (!(element instanceof Element)) {
+        return null;
+      }
+
+      const label = this.normalizeCodeLanguageLabel(element.textContent || "");
+      if (!label) {
+        return null;
+      }
+
+      const omittedElement = this.getEmbeddedCodeHeaderOmitElement(element, contentRoot);
+      const remainingText = this.extractStructuredCodeText(contentRoot, new Set([omittedElement])).trim();
+      if (!remainingText) {
+        return null;
+      }
+
+      return { element: omittedElement, label };
+    }
+
+    findLeadingEmbeddedCodeLanguageHeaderElement(root, contentRoot) {
+      for (const child of root.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          if ((child.nodeValue || "").trim()) {
+            return null;
+          }
+
+          continue;
+        }
+
+        if (!(child instanceof Element)) {
+          continue;
+        }
+
+        if (this.shouldOmitCodeExtractionNode(child)) {
+          continue;
+        }
+
+        if (this.isEmbeddedCodeLanguageHeaderElement(child, contentRoot)) {
+          return child;
+        }
+
+        const nested = this.findLeadingEmbeddedCodeLanguageHeaderElement(child, contentRoot);
+        if (nested) {
+          return nested;
+        }
+
+        if (this.hasMeaningfulCodeElementText(child)) {
+          return null;
+        }
+      }
+
+      return null;
+    }
+
+    isEmbeddedCodeLanguageHeaderElement(element, contentRoot) {
+      if (!(element instanceof Element)) {
+        return false;
+      }
+
+      const tagName = element.tagName.toLowerCase();
+      if (tagName === "pre" || tagName === "code" || element.querySelector("pre, code")) {
+        return false;
+      }
+
+      if (!this.normalizeCodeLanguageLabel(element.textContent || "")) {
+        return false;
+      }
+
+      if (
+        !this.isStandaloneCodeHeaderElement(element)
+        && !this.isInlineLabelInCodeHeaderElement(element, contentRoot)
+      ) {
+        return false;
+      }
+
+      const nextNode = this.findNextMeaningfulCodeNodeAfter(element, contentRoot);
+      if (!nextNode) {
+        return false;
+      }
+
+      if (
+        nextNode instanceof Element
+        && this.isStandaloneCodeHeaderElement(nextNode)
+        && this.normalizeCodeLanguageLabel(nextNode.textContent || "")
+      ) {
+        return false;
+      }
+
+      return true;
+    }
+
+    isInlineLabelInCodeHeaderElement(element, contentRoot) {
+      const parent = element instanceof Element ? element.parentElement : null;
+      if (!(parent instanceof Element) || parent === contentRoot) {
+        return false;
+      }
+
+      const tagName = parent.tagName.toLowerCase();
+      if (tagName === "pre" || tagName === "code" || parent.querySelector("pre, code")) {
+        return false;
+      }
+
+      return (
+        this.isStandaloneCodeHeaderElement(parent)
+        && !this.extractInlineCodeText(parent, new Set([element])).trim()
+        && Boolean(this.findNextMeaningfulCodeNodeAfter(parent, contentRoot))
+      );
+    }
+
+    isStandaloneCodeHeaderElement(element) {
+      if (!(element instanceof Element) || this.shouldOmitCodeExtractionNode(element)) {
+        return false;
+      }
+
+      const tagName = element.tagName.toLowerCase();
+      if (["div", "header"].includes(tagName)) {
+        return true;
+      }
+
+      if (!["span", "p"].includes(tagName)) {
+        return false;
+      }
+
+      const style = getComputedStyle(element);
+      return ["block", "flex", "grid", "table", "table-row", "list-item", "inline-block", "inline-flex"].includes(style.display);
+    }
+
+    findNextMeaningfulCodeNodeAfter(element, contentRoot) {
+      let current = element;
+
+      while (current && current !== contentRoot) {
+        let sibling = current.nextSibling;
+
+        while (sibling) {
+          if (sibling.nodeType === Node.TEXT_NODE) {
+            if ((sibling.nodeValue || "").trim()) {
+              return sibling;
+            }
+          } else if (sibling instanceof Element) {
+            if (!this.shouldOmitCodeExtractionNode(sibling) && this.hasMeaningfulCodeElementText(sibling)) {
+              return sibling;
+            }
+          }
+
+          sibling = sibling.nextSibling;
+        }
+
+        current = current.parentNode;
+      }
+
+      return null;
+    }
+
+    hasMeaningfulCodeElementText(element) {
+      if (!(element instanceof Element)) {
+        return false;
+      }
+
+      return Boolean(this.extractInlineCodeText(element).trim());
+    }
+
+    getEmbeddedCodeHeaderOmitElement(element, contentRoot) {
+      let omittedElement = element;
+      let current = element.parentElement;
+
+      while (current && current !== contentRoot) {
+        const tagName = current.tagName.toLowerCase();
+        if (tagName === "pre" || tagName === "code" || current.querySelector("pre, code")) {
+          break;
+        }
+
+        if (this.extractInlineCodeText(current, new Set([omittedElement])).trim()) {
+          break;
+        }
+
+        if (!this.findNextMeaningfulCodeNodeAfter(current, contentRoot)) {
+          break;
+        }
+
+        omittedElement = current;
+        current = current.parentElement;
+      }
+
+      return omittedElement;
+    }
+
+    extractCodeText(contentRoot, omittedNodes = new Set()) {
+      if (!(contentRoot instanceof Element)) {
         return "";
       }
 
-      const directText = (pre.innerText || pre.textContent || "")
+      const structuredText = this.extractStructuredCodeText(contentRoot, omittedNodes);
+      if (omittedNodes.size) {
+        return structuredText;
+      }
+
+      const directSource = contentRoot instanceof HTMLElement ? contentRoot.innerText : "";
+      const directText = (directSource || contentRoot.textContent || "")
         .replace(/\r/g, "")
         .replace(/\u00a0/g, " ")
         .replace(/\n$/, "");
-
-      const structuredText = this.extractStructuredCodeText(pre);
 
       if (structuredText) {
         const directBlankLines = (directText.match(/\n\s*\n/g) || []).length;
@@ -3938,13 +4303,34 @@
       return directText || structuredText;
     }
 
-    extractCodeHtml(pre) {
-      if (!(pre instanceof Element)) {
+    removeDuplicatedStructuralCodeLanguageLine(text, language) {
+      const label = this.normalizeCodeLanguageLabel(language);
+      if (!label || !text) {
+        return text || "";
+      }
+
+      const normalizedText = String(text).replace(/\r/g, "");
+      const firstNewlineIndex = normalizedText.indexOf("\n");
+      if (firstNewlineIndex < 0) {
+        return normalizedText;
+      }
+
+      const firstLine = normalizedText.slice(0, firstNewlineIndex).trim();
+      if (firstLine !== label) {
+        return normalizedText;
+      }
+
+      const remainingText = normalizedText.slice(firstNewlineIndex + 1).replace(/^\n+/, "");
+      return remainingText.trim() ? remainingText : normalizedText;
+    }
+
+    extractCodeHtml(contentRoot, omittedNodes = new Set()) {
+      if (!(contentRoot instanceof Element)) {
         return "";
       }
 
-      const codeNode = pre.querySelector("code") || pre;
-      const clone = codeNode.cloneNode(true);
+      const clone = contentRoot.cloneNode(true);
+      this.removeOmittedCodeNodesFromClone(contentRoot, clone, omittedNodes);
       const nodes = [clone, ...Array.from(clone.querySelectorAll("*"))];
 
       for (const node of nodes) {
@@ -3976,13 +4362,61 @@
       return clone.innerHTML.trim();
     }
 
-    extractStructuredCodeText(pre) {
-      if (!(pre instanceof Element)) {
+    removeOmittedCodeNodesFromClone(sourceRoot, cloneRoot, omittedNodes) {
+      if (!(sourceRoot instanceof Element) || !(cloneRoot instanceof Element) || !omittedNodes.size) {
+        return;
+      }
+
+      for (const omittedNode of omittedNodes) {
+        if (!(omittedNode instanceof Node) || omittedNode === sourceRoot || !sourceRoot.contains(omittedNode)) {
+          continue;
+        }
+
+        const path = this.getChildNodePath(sourceRoot, omittedNode);
+        const clonedNode = this.getNodeByChildNodePath(cloneRoot, path);
+        if (clonedNode && clonedNode.parentNode) {
+          clonedNode.parentNode.removeChild(clonedNode);
+        }
+      }
+    }
+
+    getChildNodePath(root, node) {
+      const path = [];
+      let current = node;
+
+      while (current && current !== root) {
+        const parent = current.parentNode;
+        if (!parent) {
+          return [];
+        }
+
+        path.unshift(Array.prototype.indexOf.call(parent.childNodes, current));
+        current = parent;
+      }
+
+      return current === root ? path : [];
+    }
+
+    getNodeByChildNodePath(root, path) {
+      let current = root;
+
+      for (const index of path) {
+        if (!current || !current.childNodes || index < 0 || index >= current.childNodes.length) {
+          return null;
+        }
+
+        current = current.childNodes[index];
+      }
+
+      return current;
+    }
+
+    extractStructuredCodeText(root, omittedNodes = new Set()) {
+      if (!(root instanceof Element)) {
         return "";
       }
 
-      const root = pre.querySelector("code") || pre;
-      const lineBasedText = this.extractLineBasedCodeText(root);
+      const lineBasedText = this.extractLineBasedCodeText(root, omittedNodes);
       if (lineBasedText) {
         return lineBasedText;
       }
@@ -4031,6 +4465,10 @@
           return;
         }
 
+        if (this.shouldOmitCodeExtractionNode(node, omittedNodes)) {
+          return;
+        }
+
         if (node.tagName === "BR") {
           appendNewline();
           return;
@@ -4058,17 +4496,20 @@
         .replace(/\n$/, "");
     }
 
-    extractLineBasedCodeText(root) {
+    extractLineBasedCodeText(root, omittedNodes = new Set()) {
       if (!(root instanceof Element)) {
         return "";
       }
 
-      const lineElements = Array.from(root.children).filter((child) => this.isLikelyCodeLineElement(child));
+      const lineElements = Array.from(root.children).filter((child) => (
+        !this.shouldOmitCodeExtractionNode(child, omittedNodes)
+        && this.isLikelyCodeLineElement(child)
+      ));
       if (lineElements.length < 2) {
         return "";
       }
 
-      const lines = lineElements.map((lineElement) => this.extractInlineCodeText(lineElement));
+      const lines = lineElements.map((lineElement) => this.extractInlineCodeText(lineElement, omittedNodes));
       if (!lines.some((line) => line.trim())) {
         return "";
       }
@@ -4090,7 +4531,24 @@
       return false;
     }
 
-    extractInlineCodeText(node) {
+    shouldOmitCodeExtractionNode(node, omittedNodes = new Set()) {
+      if (!(node instanceof Element)) {
+        return false;
+      }
+
+      return omittedNodes.has(node) || this.isCodeExtractionControlElement(node);
+    }
+
+    isCodeExtractionControlElement(element) {
+      if (!(element instanceof Element)) {
+        return false;
+      }
+
+      return ["button", "textarea", "input", "select", "option", "form", "label", "script", "style", "noscript"]
+        .includes(element.tagName.toLowerCase());
+    }
+
+    extractInlineCodeText(node, omittedNodes = new Set()) {
       if (!node) {
         return "";
       }
@@ -4103,57 +4561,100 @@
         return "";
       }
 
+      if (this.shouldOmitCodeExtractionNode(node, omittedNodes)) {
+        return "";
+      }
+
       if (node.tagName === "BR") {
         return "\n";
       }
 
       let output = "";
       for (const child of node.childNodes) {
-        output += this.extractInlineCodeText(child);
+        output += this.extractInlineCodeText(child, omittedNodes);
       }
       return output;
     }
 
-    detectCodeLanguage(pre) {
+    detectCodeLanguage(pre, source, contentRoot = this.getCodeBlockContentRoot(pre), embeddedHeaderLabel = "") {
       if (!(pre instanceof Element)) {
         return "";
       }
 
-      const codeNode = pre.querySelector("code");
-      const classSource = codeNode ? codeNode.className || "" : "";
-      const classMatch = classSource.match(/language-([a-z0-9_+-]+)/i);
-      if (classMatch && classMatch[1]) {
-        return classMatch[1];
+      const codeNode = contentRoot && contentRoot.tagName === "CODE"
+        ? contentRoot
+        : pre.querySelector("code");
+      const host = source instanceof Element ? this.findCodeBlockHost(pre, source) : pre;
+      const attributeOwner = pre.closest("[data-language], [data-lang], [data-code-language], [data-highlight-language]");
+      const classHint = (
+        this.extractCodeLanguageFromClass(codeNode)
+        || this.extractCodeLanguageFromClass(pre)
+        || this.extractCodeLanguageFromClass(host)
+      );
+
+      if (classHint) {
+        return classHint;
       }
 
-      const attributeHints = [
-        pre.getAttribute("data-language"),
-        pre.closest("[data-language]")?.getAttribute("data-language"),
-        codeNode ? codeNode.getAttribute("data-language") : ""
+      const attributeHint = this.extractCodeLanguageFromAttributes([codeNode, pre, host, attributeOwner]);
+      if (attributeHint) {
+        return attributeHint;
+      }
+
+      return this.findStructuralCodeLanguageLabel(host, contentRoot || pre) || embeddedHeaderLabel || "";
+    }
+
+    extractCodeLanguageFromClass(element) {
+      if (!(element instanceof Element)) {
+        return "";
+      }
+
+      const classMatch = String(element.className || "").match(/(?:^|\s)language-([a-z0-9_+.#-]+)/i);
+      return classMatch && classMatch[1] ? classMatch[1] : "";
+    }
+
+    extractCodeLanguageFromAttributes(elements) {
+      const languageAttributeNames = [
+        "data-language",
+        "data-lang",
+        "data-code-language",
+        "data-highlight-language"
       ];
 
-      for (const hint of attributeHints) {
-        if (hint && hint.trim()) {
-          return hint.trim();
-        }
-      }
-
-      let current = pre.parentElement;
-      let depth = 0;
-      while (current && depth < 4) {
-        const labelCandidate = Array.from(current.querySelectorAll("span, div, button"))
-          .map((element) => (element.textContent || "").trim())
-          .find((text) => text && text.length <= 24 && /^[A-Za-z0-9_+.#-]+$/.test(text) && !/copy/i.test(text));
-
-        if (labelCandidate) {
-          return labelCandidate;
+      for (const element of elements) {
+        if (!(element instanceof Element)) {
+          continue;
         }
 
-        current = current.parentElement;
-        depth += 1;
+        for (const attributeName of languageAttributeNames) {
+          const label = this.normalizeCodeLanguageLabel(element.getAttribute(attributeName));
+          if (label) {
+            return label;
+          }
+        }
       }
 
       return "";
+    }
+
+    findStructuralCodeLanguageLabel(host, contentRoot) {
+      const header = this.findHostCodeLanguageHeader(host, contentRoot);
+      return header ? header.label : "";
+    }
+
+    normalizeCodeLanguageLabel(value) {
+      const label = String(value || "").replace(/\s+/g, " ").trim();
+
+      if (
+        !label
+        || label.length > 32
+        || /copy/i.test(label)
+        || !/^[A-Za-z0-9_+.#-]+$/.test(label)
+      ) {
+        return "";
+      }
+
+      return label;
     }
 
     injectArchivedCodeBlocks(root, sourceCodeBlocks) {
@@ -4181,13 +4682,21 @@
       let host = preNode;
       let current = preNode.parentElement;
       let depth = 0;
+      const contentRoot = this.getCodeBlockContentRoot(preNode);
 
-      while (current && current !== root && depth < 4) {
+      while (current && current !== root && depth < 8) {
         if (current.querySelectorAll("pre").length !== 1) {
           break;
         }
 
-        host = current;
+        if (depth < 4) {
+          host = current;
+        }
+
+        if (this.findHostCodeLanguageHeader(current, contentRoot || preNode)) {
+          return current;
+        }
+
         current = current.parentElement;
         depth += 1;
       }
@@ -4209,16 +4718,12 @@
       const copyButton = doc.createElement("button");
       copyButton.type = "button";
       copyButton.setAttribute("data-rapid-view-for-chatgpt-copy-code", "true");
-      copyButton.setAttribute("data-rapid-view-for-chatgpt-copy-value", block.text);
+      copyButton.setAttribute("data-rapid-view-for-chatgpt-copy-value", block.text || "");
       copyButton.textContent = "Copy";
 
       const pre = doc.createElement("pre");
       const code = doc.createElement("code");
-      if (block.html) {
-        code.innerHTML = block.html;
-      } else {
-        code.textContent = block.text;
-      }
+      code.textContent = block.text || "";
       pre.appendChild(code);
 
       header.appendChild(language);
@@ -7578,10 +8083,15 @@
 
       for (const codeBlock of body.querySelectorAll("[data-rapid-view-for-chatgpt-code-block]")) {
         Object.assign(codeBlock.style, {
+          display: "block",
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: "0",
           margin: "0 0 12px",
           border: "1px solid rgba(101, 120, 154, 0.20)",
           borderRadius: "12px",
-          overflow: "hidden",
+          overflow: "visible",
+          boxSizing: "border-box",
           background: viewMode === "rich"
             ? "linear-gradient(180deg, rgba(225, 232, 243, 0.98), rgba(214, 223, 238, 0.96))"
             : "linear-gradient(180deg, rgba(216, 225, 240, 0.98), rgba(205, 216, 234, 0.96))"
@@ -7646,14 +8156,22 @@
 
       for (const pre of body.querySelectorAll("pre")) {
         Object.assign(pre.style, {
+          display: "block",
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: "0",
           whiteSpace: "pre",
           overflowX: "auto",
+          overflowY: "visible",
           padding: "12px",
-          margin: "0 0 10px",
+          margin: pre.closest("[data-rapid-view-for-chatgpt-code-block]") ? "0" : "0 0 10px",
           borderRadius: "10px",
           background: viewMode === "rich" ? "rgba(205, 216, 234, 0.86)" : "rgba(194, 207, 228, 0.88)",
           color: "#22364d",
-          font: "12px/1.5 Consolas, 'Courier New', monospace"
+          font: "12px/1.5 Consolas, 'Courier New', monospace",
+          boxSizing: "border-box",
+          WebkitOverflowScrolling: "touch",
+          scrollbarWidth: "thin"
         });
       }
 
@@ -7661,11 +8179,16 @@
         if (code.parentElement && code.parentElement.tagName === "PRE") {
           Object.assign(code.style, {
             display: "block",
+            width: "max-content",
+            minWidth: "100%",
+            maxWidth: "none",
             whiteSpace: "pre",
             padding: "0",
             background: "transparent",
             color: "#22364d",
-            font: "12px/1.5 Consolas, 'Courier New', monospace"
+            font: "12px/1.5 Consolas, 'Courier New', monospace",
+            boxSizing: "border-box",
+            overflow: "visible"
           });
           continue;
         }
