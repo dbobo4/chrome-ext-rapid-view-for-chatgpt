@@ -10,7 +10,7 @@
   const namespace = global.RapidViewForChatGPT;
   const constants = namespace.Constants;
   const settingsApi = namespace.Settings;
-  const { LIMITS, STATUS, STATUS_MESSAGE_TYPE, ARCHIVE_ACTION_MESSAGE_TYPE } = constants;
+  const { LIMITS, STATUS, STATUS_MESSAGE_TYPE, ARCHIVE_ACTION_MESSAGE_TYPE, EXPORT_CONVERSATION_MESSAGE_TYPE } = constants;
   const OWN_ROOT_MUTATION_GUARD_MS = 250;
   const TURN_SELECTOR = "section[data-turn-id][data-turn][data-testid^='conversation-turn-']";
   const RAPID_VIEW_OWNED_UI_SELECTOR = [
@@ -3488,6 +3488,370 @@
         .trim();
     }
 
+    buildConversationExport() {
+      if (!this.root || !this.records.length) {
+        return {
+          text: "",
+          turnCount: 0
+        };
+      }
+
+      const turns = [];
+
+      for (const record of this.records) {
+        const text = this.trimExportText(this.getRecordExportText(record));
+        if (!this.hasUsableArchiveText(text)) {
+          continue;
+        }
+
+        turns.push({
+          role: record.role === "user" ? "USER" : "ASSISTANT",
+          text
+        });
+      }
+
+      if (!turns.length) {
+        return {
+          text: "",
+          turnCount: 0
+        };
+      }
+
+      const body = turns
+        .map((turn) => `===== ${turn.role} TURN =====\n${turn.text}`)
+        .join("\n\n");
+
+      return {
+        text: `${body.replace(/\r?\n/g, "\r\n")}\r\n`,
+        turnCount: turns.length
+      };
+    }
+
+    buildConversationExportText() {
+      return this.buildConversationExport().text;
+    }
+
+    getRecordExportText(record) {
+      if (!record) {
+        return "";
+      }
+
+      const domText = this.getRecordDomExportText(record);
+      if (this.hasUsableArchiveText(domText)) {
+        return domText;
+      }
+
+      return this.getRecordCachedExportText(record);
+    }
+
+    getRecordDomExportText(record) {
+      const sourceRoot = this.buildRecordSourceRoot(record);
+      if (!(sourceRoot instanceof Element)) {
+        return "";
+      }
+
+      const contentSource = this.selectSnapshotSource(sourceRoot, record.role);
+      const exportSource = contentSource instanceof Element ? contentSource : sourceRoot;
+      return this.extractExportPlainText(exportSource);
+    }
+
+    getRecordCachedExportText(record) {
+      const manualEntry = this.getManualArchiveEntry(record);
+      const textCandidates = [
+        manualEntry?.simpleText,
+        record.plainTextFallback
+      ];
+
+      for (const candidate of textCandidates) {
+        if (this.hasUsableArchiveText(candidate)) {
+          return String(candidate);
+        }
+      }
+
+      const htmlCandidates = [
+        manualEntry?.simpleHtml,
+        record.snapshotHtml,
+        manualEntry?.renderedHtml,
+        record.richHtml
+      ];
+
+      for (const candidate of htmlCandidates) {
+        const text = this.extractExportTextFromHtml(candidate);
+        if (this.hasUsableArchiveText(text)) {
+          return text;
+        }
+      }
+
+      return "";
+    }
+
+    extractExportTextFromHtml(html) {
+      if (!this.hasStrictArchiveHtml(html)) {
+        return "";
+      }
+
+      const container = document.createElement("div");
+      container.innerHTML = String(html).trim();
+      return this.extractExportPlainText(container);
+    }
+
+    extractExportPlainText(node) {
+      if (!node) {
+        return "";
+      }
+
+      const blockTags = new Set([
+        "p", "div", "section", "article", "blockquote",
+        "ul", "ol", "li",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "pre", "table", "thead", "tbody", "tr"
+      ]);
+      const sourceElement = node instanceof Element ? node : null;
+      const codeContext = this.buildExportCodeBlockContext(sourceElement);
+      const segments = [];
+
+      const pushSegment = (type, value) => {
+        if (!value) {
+          return;
+        }
+
+        const last = segments[segments.length - 1];
+        if (last && last.type === type) {
+          last.value += value;
+          return;
+        }
+
+        segments.push({ type, value });
+      };
+
+      const pushText = (text) => pushSegment("text", text);
+      const pushCode = (text) => pushSegment("code", text);
+      const pushBreak = () => pushText("\n");
+
+      const visitNode = (currentNode) => {
+        if (!currentNode) {
+          return;
+        }
+
+        if (currentNode.nodeType === Node.TEXT_NODE) {
+          pushText(currentNode.textContent || "");
+          return;
+        }
+
+        if (currentNode.nodeType !== Node.ELEMENT_NODE) {
+          return;
+        }
+
+        const element = currentNode;
+        const tagName = element.tagName.toLowerCase();
+
+        if (element.hasAttribute("data-rapid-view-for-chatgpt-code-block")) {
+          const codeText = this.getArchivedCodeBlockExportText(element);
+          if (codeText) {
+            pushBreak();
+            pushCode(codeText);
+            pushBreak();
+          }
+          return;
+        }
+
+        if (this.shouldSkipExportElement(element, codeContext.omittedNodes)) {
+          return;
+        }
+
+        if (this.isMathElement(element)) {
+          const latexSource = this.extractLatexSource(element);
+          if (latexSource) {
+            if (this.isDisplayMathElement(element)) {
+              pushBreak();
+              pushText(latexSource);
+              pushBreak();
+            } else {
+              pushText(latexSource);
+            }
+            return;
+          }
+        }
+
+        if (tagName === "br") {
+          pushBreak();
+          return;
+        }
+
+        if (tagName === "hr") {
+          pushBreak();
+          pushText("---");
+          pushBreak();
+          return;
+        }
+
+        if (tagName === "pre") {
+          const codeText = codeContext.codeTextByPre.get(element) || this.extractCodeText(element);
+          if (codeText) {
+            pushBreak();
+            pushCode(codeText);
+            pushBreak();
+          }
+          return;
+        }
+
+        if (blockTags.has(tagName)) {
+          pushBreak();
+        }
+
+        for (const child of element.childNodes) {
+          visitNode(child);
+        }
+
+        if (blockTags.has(tagName)) {
+          pushBreak();
+        }
+      };
+
+      visitNode(node);
+      return this.combineExportSegments(segments);
+    }
+
+    buildExportCodeBlockContext(source) {
+      const context = {
+        codeTextByPre: new Map(),
+        omittedNodes: new Set()
+      };
+
+      if (!(source instanceof Element)) {
+        return context;
+      }
+
+      const preNodes = [];
+      if (source.tagName.toLowerCase() === "pre") {
+        preNodes.push(source);
+      }
+      preNodes.push(...Array.from(source.querySelectorAll("pre")));
+
+      for (const pre of preNodes) {
+        const parts = this.buildCodeBlockParts(pre, source);
+        if (parts.omittedNodes instanceof Set) {
+          for (const omittedNode of parts.omittedNodes) {
+            context.omittedNodes.add(omittedNode);
+          }
+        }
+
+        const codeText = this.removeDuplicatedStructuralCodeLanguageLine(
+          this.extractCodeText(parts.contentRoot || pre, parts.omittedNodes),
+          parts.language
+        );
+        context.codeTextByPre.set(pre, codeText);
+      }
+
+      return context;
+    }
+
+    shouldSkipExportElement(element, omittedNodes = new Set()) {
+      if (!(element instanceof HTMLElement)) {
+        return true;
+      }
+
+      if (omittedNodes.has(element) || this.isRapidViewOwnedElement(element) || this.shouldSkipArchiveElement(element)) {
+        return true;
+      }
+
+      if (element.closest([
+        "[data-rapid-view-for-chatgpt-code-header]",
+        "[data-rapid-view-for-chatgpt-copy-code]",
+        "[data-rapid-view-for-chatgpt-simple-toggle]",
+        "[data-rapid-view-for-chatgpt-turn-bridge]"
+      ].join(","))) {
+        return true;
+      }
+
+      return ["button", "textarea", "input", "select", "option", "form", "label", "script", "style", "noscript"]
+        .includes(element.tagName.toLowerCase());
+    }
+
+    getArchivedCodeBlockExportText(element) {
+      if (!(element instanceof Element)) {
+        return "";
+      }
+
+      const copyButton = element.querySelector("[data-rapid-view-for-chatgpt-copy-code]");
+      const copyValue = copyButton ? copyButton.getAttribute("data-rapid-view-for-chatgpt-copy-value") : "";
+      if (copyValue && copyValue.trim()) {
+        return copyValue;
+      }
+
+      const codeNode = element.querySelector("pre code") || element.querySelector("pre");
+      return codeNode ? (codeNode.textContent || "") : "";
+    }
+
+    normalizeExportTextSegment(value) {
+      return String(value || "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/[ \t]+/g, " ")
+        .replace(/[ \t]*\n[ \t]*/g, "\n")
+        .replace(/\n{3,}/g, "\n\n");
+    }
+
+    normalizeExportCodeSegment(value) {
+      return String(value || "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/^\n+/, "")
+        .replace(/\n+$/, "");
+    }
+
+    combineExportSegments(segments) {
+      let output = "";
+      let firstSegmentType = "";
+      let lastSegmentType = "";
+
+      for (const segment of segments) {
+        const normalized = segment.type === "code"
+          ? this.normalizeExportCodeSegment(segment.value)
+          : this.normalizeExportTextSegment(segment.value);
+
+        if (!normalized || !normalized.trim()) {
+          continue;
+        }
+
+        if (!firstSegmentType) {
+          firstSegmentType = segment.type;
+        }
+        lastSegmentType = segment.type;
+
+        if (segment.type === "code") {
+          output = output.replace(/[ \t]+$/, "");
+          if (output && !output.endsWith("\n")) {
+            output += "\n";
+          }
+          output += normalized;
+          if (!output.endsWith("\n")) {
+            output += "\n";
+          }
+          continue;
+        }
+
+        output += normalized;
+      }
+
+      let trimmed = this.trimExportText(output);
+      if (firstSegmentType !== "code") {
+        trimmed = trimmed.replace(/^[ \t]+/, "");
+      }
+      if (lastSegmentType !== "code") {
+        trimmed = trimmed.replace(/[ \t]+$/, "");
+      }
+      return trimmed;
+    }
+
+    trimExportText(value) {
+      return String(value || "")
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/^(?:[ \t]*\n)+/, "")
+        .replace(/(?:\n[ \t]*)+$/, "");
+    }
+
     processDeferredSnapshotBatch() {
       this.processRichSnapshotBatch();
     }
@@ -5457,76 +5821,7 @@
     }
 
     extractPlainText(node) {
-      if (!node) {
-        return "";
-      }
-
-      const blockTags = new Set([
-        "p", "div", "section", "article", "blockquote",
-        "ul", "ol", "li",
-        "h1", "h2", "h3", "h4", "h5", "h6",
-        "pre", "table", "thead", "tbody", "tr"
-      ]);
-
-      const visitNode = (currentNode) => {
-        if (!currentNode) {
-          return "";
-        }
-
-        if (currentNode.nodeType === Node.TEXT_NODE) {
-          return currentNode.textContent || "";
-        }
-
-        if (currentNode.nodeType !== Node.ELEMENT_NODE) {
-          return "";
-        }
-
-        const element = currentNode;
-        const tagName = element.tagName.toLowerCase();
-
-        if (this.isMathElement(element)) {
-          const latexSource = this.extractLatexSource(element);
-          if (latexSource) {
-            return this.isDisplayMathElement(element) ? `\n${latexSource}\n` : latexSource;
-          }
-        }
-
-        if (this.shouldSkipArchiveElement(element)) {
-          return "";
-        }
-
-        if (tagName === "br") {
-          return "\n";
-        }
-
-        if (tagName === "hr") {
-          return "\n---\n";
-        }
-
-        let text = "";
-
-        if (blockTags.has(tagName)) {
-          text += "\n";
-        }
-
-        for (const child of element.childNodes) {
-          text += visitNode(child);
-        }
-
-        if (blockTags.has(tagName)) {
-          text += "\n";
-        }
-
-        return text;
-      };
-
-      return visitNode(node)
-        .replace(/\r/g, "")
-        .replace(/[ \t]+\n/g, "\n")
-        .replace(/\n[ \t]+/g, "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .replace(/[ \t]{2,}/g, " ")
-        .trim();
+      return this.extractExportPlainText(node);
     }
 
     renderPlainTextHtml(text) {
@@ -10269,6 +10564,32 @@
       this.watchCurrentRoot(this.engine.root);
     }
 
+    hasExportReadyRoot() {
+      return Boolean(
+        this.engine.root
+        && document.contains(this.engine.root)
+        && Array.isArray(this.engine.records)
+        && this.engine.records.length > 0
+      );
+    }
+
+    ensureExportReadyRoot() {
+      if (this.hasExportReadyRoot()) {
+        return true;
+      }
+
+      if (this.reinitializeTimer) {
+        global.clearTimeout(this.reinitializeTimer);
+        this.reinitializeTimer = 0;
+      }
+
+      this.bootstrapDeadline = 0;
+      this.bootstrapStartedAt = 0;
+      this.forceImmediateBootstrap = true;
+      this.initialize("export-request");
+      return this.hasExportReadyRoot();
+    }
+
     disconnectBodyObserver() {
       if (this.bodyObserver) {
         this.bodyObserver.disconnect();
@@ -10285,6 +10606,34 @@
 
       if (message.type === STATUS_MESSAGE_TYPE) {
         sendResponse(this.status);
+        return true;
+      }
+
+      if (message.type === EXPORT_CONVERSATION_MESSAGE_TYPE) {
+        try {
+          if (!this.ensureExportReadyRoot()) {
+            sendResponse({ ok: false, reason: "no active ChatGPT conversation root was found" });
+            return true;
+          }
+
+          const exportPayload = this.engine.buildConversationExport();
+          if (!exportPayload.text || !exportPayload.text.trim()) {
+            sendResponse({ ok: false, reason: "no exportable conversation turns were found" });
+            return true;
+          }
+
+          sendResponse({
+            ok: true,
+            text: exportPayload.text,
+            turnCount: exportPayload.turnCount
+          });
+        } catch (error) {
+          sendResponse({
+            ok: false,
+            reason: error && error.message ? error.message : "conversation export failed"
+          });
+        }
+
         return true;
       }
 

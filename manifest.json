@@ -10,8 +10,13 @@
     "128": "assets/icon128.png"
   },
   "permissions": [
-    "storage"
+    "storage",
+    "downloads",
+    "offscreen"
   ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*"

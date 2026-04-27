@@ -1,6 +1,6 @@
 # Rapid View for ChatGPT
 
-Rapid View for ChatGPT is a Chrome Manifest V3 extension that keeps long ChatGPT conversations usable by locally virtualizing older turns. It archives heavy historical DOM into lighter local snapshots, keeps the newest turns live, and provides manual or dynamic archive readers for reviewing older context without keeping the whole thread mounted.
+Rapid View for ChatGPT is a Chrome Manifest V3 extension that keeps long ChatGPT conversations usable by locally virtualizing older turns. It archives heavy historical DOM into lighter local snapshots, keeps the newest turns live, provides manual or dynamic archive readers, and can save the currently detected conversation as a local TXT file.
 
 ## Project Overview
 
@@ -12,7 +12,7 @@ Long ChatGPT threads can become expensive for the browser when many rich answers
 - removes or hides heavy historical live DOM
 - renders an archive UI for reading, copying, restoring, and switching archived views
 
-The extension is intentionally local-first. It does not add a backend service or a conversation export pipeline; it focuses on making the active ChatGPT tab lighter while preserving access to older content.
+The extension is intentionally local-first. It does not add a backend service; speed mode and TXT export both run from the active ChatGPT tab, with export handled as a local browser download.
 
 ## Main Capabilities
 
@@ -26,6 +26,7 @@ The extension is intentionally local-first. It does not add a backend service or
 - Structured archived code blocks with separate language labels, rendered code bodies, and clean copy values
 - Copy buttons that copy the code body instead of the visual language/header label
 - Expandable simple previews through `Show full simple`
+- Popup-triggered TXT export for the active detected conversation
 - Popup status reporting for `Active`, `Ready`, `Searching`, `Disabled`, `Unavailable`, and error states
 
 ## How It Works
@@ -116,13 +117,16 @@ This is especially important for command blocks where copying a visual label suc
 
 Rapid View for ChatGPT is designed as a local-only browser extension.
 
-- The manifest requests only the `storage` permission.
+- The manifest requests only the `storage`, `downloads`, and `offscreen` permissions.
 - Host permissions are limited to:
   - `https://chatgpt.com/*`
   - `https://chat.openai.com/*`
-- Settings and local archive state are stored through `chrome.storage.local`.
+- `storage` is used for extension settings.
+- `downloads` is used only to open Chrome's local save flow for `chatgpt_extracted_conversation.txt`.
+- `offscreen` is used only to create and hold a local TXT Blob URL while Chrome's Save As flow is active.
+- Archive snapshots and export text are generated locally in the active tab/session.
 - There is no backend server in this repository.
-- There is no custom network pipeline for exporting conversation content.
+- There is no custom network pipeline or upload step for exporting conversation content.
 
 ## Repository Structure
 
@@ -135,8 +139,13 @@ Rapid View for ChatGPT is designed as a local-only browser extension.
 |   |-- icon48.png
 |   `-- icon128.png
 |-- src/
+|   |-- background/
+|   |   `-- service-worker.js
 |   |-- content/
 |   |   `-- content-script.js
+|   |-- offscreen/
+|   |   |-- download.html
+|   |   `-- download.js
 |   |-- popup/
 |   |   |-- popup.html
 |   |   |-- popup.css
@@ -151,16 +160,18 @@ Rapid View for ChatGPT is designed as a local-only browser extension.
 ### Important Files
 
 - `manifest.json` - Chrome Manifest V3 metadata, permissions, popup registration, and content-script wiring
+- `src/background/service-worker.js` - Blob URL lease and cleanup coordinator for TXT export
 - `src/content/content-script.js` - main runtime for page detection, archiving, virtualization, archive rendering, code block handling, manual mode, and dynamic mode
-- `src/shared/constants.js` - version, message types, default settings, runtime statuses, and activation limits
+- `src/offscreen/download.html` and `src/offscreen/download.js` - offscreen document used to create and revoke export Blob URLs
+- `src/shared/constants.js` - version, message types, export filename, default settings, runtime statuses, and activation limits
 - `src/shared/settings.js` - storage-backed settings normalization, load, save, reset, and change listener helpers
-- `src/popup/popup.html` - popup structure for enable state, reader mode selection, and status display
+- `src/popup/popup.html` - popup structure for enable state, TXT export, reader mode selection, and status display
 - `src/popup/popup.css` - popup visual styling
-- `src/popup/popup.js` - popup settings and status wiring
+- `src/popup/popup.js` - popup settings, status, export request, and local download wiring
 
 ## Runtime Architecture
 
-The runtime is intentionally simple: there is no bundler, no background worker, and no external package dependency.
+The runtime is intentionally simple: there is no bundler and no external package dependency. A small background service worker and offscreen document are used only for reliable TXT Blob URL lifecycle management.
 
 ```text
 ChatGPT page
@@ -170,7 +181,10 @@ ChatGPT page
   -> archive thresholds decide whether virtualization activates
   -> older turns are indexed/snapshotted
   -> archive UI renders manual or dynamic reader mode
-  -> popup reads settings/status through Chrome extension APIs
+  -> popup reads settings/status and requests TXT export text
+  -> background service worker asks offscreen to create a Blob URL
+  -> popup starts Chrome Save As with chrome.downloads.download
+  -> background/offscreen revoke the Blob URL after download completion or timeout
 ```
 
 The implementation is mostly custom DOM engineering. The distinctive part of the project is not third-party integration, but the page-side state management needed to keep a changing ChatGPT DOM usable under long conversations.
@@ -214,6 +228,11 @@ There is no build step in the current repository. Load the project directly as a
 D:\Python\my_side_projects\chrome_chatgpt_speed_booster
 ```
 
+After changing `manifest.json`, background/offscreen files, or the content script, reload both pieces that Chrome keeps cached:
+
+1. Click **Reload** for the unpacked extension in `chrome://extensions`.
+2. Reload the open ChatGPT tab so the new content script runs in the page.
+
 ## Usage
 
 1. Open a ChatGPT conversation on `chatgpt.com` or `chat.openai.com`.
@@ -222,6 +241,7 @@ D:\Python\my_side_projects\chrome_chatgpt_speed_booster
 4. Choose `Manual` or `Dynamic`.
 5. Continue using the conversation normally.
 6. When the conversation becomes large enough, the extension switches into active archive behavior.
+7. Use the download icon in the popup header to save the currently detected conversation as `chatgpt_extracted_conversation.txt`.
 
 Popup status meanings:
 
@@ -240,6 +260,16 @@ Manual archive actions:
 - `All simple` switches visible archived records to simple mode.
 - `All rendered` switches visible archived records to rendered mode.
 
+TXT export:
+
+- The popup asks the active tab's content script for the current internal turn list.
+- The popup asks the background/offscreen path to prepare a temporary Blob URL, then the visible popup starts Chrome Save As through `chrome.downloads.download`.
+- The background service worker tracks the prepared Blob URL lease and revokes it after the download completes, is interrupted, is explicitly released, or times out.
+- The downloaded file contains only role-labeled turns, for example `USER TURN` and `ASSISTANT TURN`, plus simple text content.
+- The export omits route data, timestamps, internal record IDs, pair bridges, archive controls, timeline UI, copy buttons, and code-header UI.
+- Code blocks prefer the structured code body where available, so visual labels such as `PowerShell` or `properties` are not added to the code text.
+- If export fails, the popup download icon briefly enters an error state and the popup DevTools console logs the exact reason, such as a missing extension reload, stale ChatGPT tab, unsupported tab, or empty export source.
+
 ## Validation
 
 The current repository uses lightweight validation rather than a full browser automation suite.
@@ -248,19 +278,29 @@ Useful static checks:
 
 ```powershell
 node --check src\content\content-script.js
+node --check src\popup\popup.js
 node --check src\shared\constants.js
-git diff --check -- src\content\content-script.js src\shared\constants.js README.md
+node --check src\background\service-worker.js
+node --check src\offscreen\download.js
+git diff --check -- manifest.json README.md src\content\content-script.js src\popup\popup.html src\popup\popup.css src\popup\popup.js src\shared\constants.js src\background\service-worker.js src\offscreen\download.html src\offscreen\download.js
 ```
 
 Recommended manual smoke checks:
 
-- Load the unpacked extension in Chrome.
+- Reload the unpacked extension in `chrome://extensions`.
+- Reload the active ChatGPT conversation tab.
 - Open a long ChatGPT thread.
 - Confirm popup status transitions from `Searching` or `Ready` to `Active` when thresholds are met.
 - In manual mode, use `Load N older` and verify user/assistant pairs remain visually grouped.
 - In dynamic mode, use timeline dots and hover previews.
 - Switch between `Simple` and `Rendered`.
 - Copy from an archived `PowerShell` or `properties` code block and verify the copied value excludes the language/header label.
+- Click the popup download icon in `Manual` mode and confirm Chrome opens Save As with `chatgpt_extracted_conversation.txt`.
+- Save the TXT and confirm turns are in original order with only `USER TURN` / `ASSISTANT TURN` labels and simple text content.
+- Repeat the export smoke check in `Dynamic` mode.
+- Cancel the Save As dialog and confirm no stale error loop or empty download appears.
+- On an unsupported tab, click the export icon and confirm no empty TXT download starts and the icon briefly shows its error state.
+- After an extension reload without reloading the ChatGPT tab, click export and confirm the popup reports that the ChatGPT tab needs reload instead of failing silently.
 
 ## Design Evolution
 

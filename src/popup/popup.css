@@ -79,6 +79,7 @@ body {
 }
 
 .popup__header-copy {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -96,6 +97,86 @@ body {
   color: var(--text-soft);
   font-size: 10px;
   line-height: 1.35;
+}
+
+.header-export-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin-top: -1px;
+  padding: 0;
+  border: 1px solid rgba(114, 142, 190, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(47, 58, 77, 0.82), rgba(28, 35, 47, 0.9)),
+    rgba(34, 43, 58, 0.88);
+  color: rgba(216, 228, 248, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 18px rgba(0, 0, 0, 0.16);
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.header-export-button svg {
+  width: 17px;
+  height: 17px;
+  pointer-events: none;
+}
+
+.header-export-button:hover:not(:disabled),
+.header-export-button:focus-visible {
+  border-color: rgba(84, 150, 255, 0.54);
+  background:
+    linear-gradient(180deg, rgba(50, 92, 160, 0.84), rgba(29, 58, 113, 0.9)),
+    rgba(35, 80, 150, 0.88);
+  color: #f5f9ff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 0 1px rgba(42, 124, 255, 0.16),
+    0 0 18px rgba(42, 124, 255, 0.22),
+    0 8px 18px rgba(0, 0, 0, 0.2);
+  outline: none;
+}
+
+.header-export-button:active:not(:disabled) {
+  background:
+    linear-gradient(180deg, rgba(30, 76, 153, 0.92), rgba(22, 52, 113, 0.94)),
+    rgba(26, 74, 150, 0.9);
+}
+
+.header-export-button:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.header-export-button.is-busy {
+  border-color: rgba(84, 150, 255, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(42, 124, 255, 0.12),
+    0 0 16px rgba(42, 124, 255, 0.18);
+}
+
+.header-export-button.is-error {
+  border-color: rgba(228, 96, 96, 0.48);
+  background:
+    linear-gradient(180deg, rgba(116, 43, 52, 0.86), rgba(73, 30, 38, 0.92)),
+    rgba(82, 32, 42, 0.9);
+  color: #ffd5d5;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(228, 96, 96, 0.12),
+    0 0 14px rgba(228, 96, 96, 0.18);
 }
 
 .header-toggle {
