@@ -5749,23 +5749,32 @@
         loadMoreButton.addEventListener("click", this.handleLoadMoreClick);
 
         const archiveActionDots = [
-          [collapseAllDot, "Collapse all", () => this.collapseVisibleArchived()],
-          [loadAllDot, "Load all", () => this.loadAllArchived()],
-          [allSimpleDot, "All simple", () => this.setVisibleArchiveViewMode("simple")],
-          [allRenderedDot, "All rendered", () => this.setVisibleArchiveViewMode("rich")]
+          [collapseAllDot, "Collapse all", "C", () => this.collapseVisibleArchived()],
+          [loadAllDot, "Load all", "L", () => this.loadAllArchived()],
+          [allSimpleDot, "All simple", "S", () => this.setVisibleArchiveViewMode("simple")],
+          [allRenderedDot, "All rendered", "R", () => this.setVisibleArchiveViewMode("rich")]
         ];
 
-        for (const [button, label, onClick] of archiveActionDots) {
+        for (const [button, label, indicator, onClick] of archiveActionDots) {
           button.type = "button";
           button.title = label;
           button.setAttribute("aria-label", label);
+          button.textContent = indicator;
           Object.assign(button.style, {
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
             width: "16px",
             height: "16px",
             padding: "0",
             border: "1px solid rgba(122, 142, 179, 0.46)",
             borderRadius: "50%",
             background: "radial-gradient(circle at 35% 35%, rgba(250, 252, 255, 0.98), rgba(210, 221, 239, 0.96) 42%, rgba(132, 149, 180, 0.94) 72%, rgba(89, 103, 129, 0.96))",
+            color: "#2e4a72",
+            font: "700 9px/1 'Segoe UI', sans-serif",
+            letterSpacing: "0",
+            textAlign: "center",
+            textShadow: "0 1px 0 rgba(255, 255, 255, 0.62)",
             cursor: "pointer",
             transition: "transform 140ms ease, border-color 140ms ease"
           });
