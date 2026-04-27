@@ -1899,6 +1899,8 @@
           previous.trackTopPx = previous.trackTopPx || 0;
           previous.dynamicTrackHeightPx = previous.dynamicTrackHeightPx || 0;
           previous.dynamicTrackTopPx = previous.dynamicTrackTopPx || 0;
+          previous.dynamicTrackMeasureKey = previous.dynamicTrackMeasureKey || "";
+          previous.dynamicTrackGapPx = Number(previous.dynamicTrackGapPx) || 0;
           previous.dynamicChromeHeightPx = previous.dynamicChromeHeightPx || 0;
           previous.dynamicUnits = Array.isArray(previous.dynamicUnits) ? previous.dynamicUnits : [];
           previous.dynamicRenderedHeight = previous.dynamicRenderedHeight || 0;
@@ -1945,6 +1947,8 @@
           trackTopPx: 0,
           dynamicTrackHeightPx: 0,
           dynamicTrackTopPx: 0,
+          dynamicTrackMeasureKey: "",
+          dynamicTrackGapPx: 0,
           dynamicChromeHeightPx: 0,
           dynamicUnits: [],
           dynamicRenderedHeight: 0,
@@ -2488,6 +2492,8 @@
       record.trackTopPx = record.trackTopPx || 0;
       record.dynamicTrackHeightPx = record.dynamicTrackHeightPx || 0;
       record.dynamicTrackTopPx = record.dynamicTrackTopPx || 0;
+      record.dynamicTrackMeasureKey = record.dynamicTrackMeasureKey || "";
+      record.dynamicTrackGapPx = Number(record.dynamicTrackGapPx) || 0;
       record.dynamicChromeHeightPx = record.dynamicChromeHeightPx || 0;
       record.dynamicUnits = Array.isArray(record.dynamicUnits) ? record.dynamicUnits : [];
       record.dynamicRenderedHeight = record.dynamicRenderedHeight || 0;
@@ -5928,19 +5934,68 @@
       }
 
       const archiveUi = this.ensureArchiveUi();
-      const renderState = this.buildDynamicSliceRenderState(trackEntries);
-      const sliceKey = `slice-${renderState.windowStartSlice}`;
-      this.dynamicScrollFocusId = sliceKey;
-      this.dynamicScrollActiveId = sliceKey;
-      this.dynamicScrollTargetId = "";
-      this.dynamicSliceCount = renderState.sliceCount;
+      let activeTrackEntries = trackEntries;
+      let activeRenderState = this.buildDynamicSliceRenderState(activeTrackEntries);
+      let layoutAdjusted = false;
 
-      for (const entry of renderState.visibleEntries) {
+      for (const entry of activeRenderState.visibleEntries) {
         this.ensureDynamicRenderableRecord(entry.record);
       }
 
       this.virtualizeDynamicTrackNodes();
       this.hiddenCount = 0;
+      this.renderDynamicArchiveWindow(archiveUi, activeTrackEntries, activeRenderState);
+
+      if (this.measureVisibleDynamicRecordHeights(activeRenderState)) {
+        layoutAdjusted = true;
+        this.ensureDynamicTrackGeometry();
+        activeTrackEntries = this.getDynamicTrackRecords();
+        activeRenderState = this.buildDynamicSliceRenderState(activeTrackEntries);
+
+        for (const entry of activeRenderState.visibleEntries) {
+          this.ensureDynamicRenderableRecord(entry.record);
+        }
+
+        this.renderDynamicArchiveWindow(archiveUi, activeTrackEntries, activeRenderState);
+      }
+
+      this.renderDynamicTimeline(archiveUi, activeTrackEntries, activeRenderState);
+      this.updateDynamicScrollBinding();
+
+      for (const entry of activeRenderState.visibleEntries) {
+        if (!entry.record.richHtml && !entry.record.richRequestPending) {
+          this.requestRichSnapshot(entry.record);
+        }
+      }
+
+      if (activeRenderState.visibleEntries.some((entry) => entry.record.snapshotState === "pending")) {
+        this.scheduleDeferredSnapshotWork();
+      }
+
+      this.logger.info("sync-dynamic-archive-ui", {
+        durationMs: this.getDurationMs(startedAt),
+        indexedCount: activeTrackEntries.length,
+        currentSliceIndex: activeRenderState.currentSliceIndex,
+        sliceCount: activeRenderState.sliceCount,
+        sliceHeight: Math.round(activeRenderState.sliceHeight),
+        totalTrackHeight: Math.round(activeRenderState.totalHeight),
+        contentTrackHeight: Math.round(activeRenderState.contentHeight),
+        visibleRecordCount: activeRenderState.visibleEntries.length,
+        hiddenCount: this.hiddenCount,
+        windowStartSlice: activeRenderState.windowStartSlice,
+        windowEndSlice: activeRenderState.windowEndSlice,
+        windowStartY: Math.round(activeRenderState.windowStartY),
+        windowEndY: Math.round(activeRenderState.windowEndY),
+        layoutAdjusted
+      });
+    }
+
+    renderDynamicArchiveWindow(archiveUi, trackEntries, renderState) {
+      const sliceKey = `slice-${renderState.windowStartSlice}`;
+      this.dynamicScrollFocusId = sliceKey;
+      this.dynamicScrollActiveId = sliceKey;
+      this.dynamicScrollTargetId = "";
+      this.dynamicSliceCount = renderState.sliceCount;
       this.dynamicVisibleCount = renderState.visibleEntries.length;
       this.updateArchiveUiChrome(archiveUi, trackEntries.length);
       archiveUi.host.style.minHeight = `${Math.max(420, Math.round(renderState.windowHeight + 120))}px`;
@@ -5951,36 +6006,67 @@
       archiveUi.topSpacer.style.height = "0px";
       archiveUi.bottomSpacer.style.height = "0px";
       archiveUi.list.replaceChildren(this.createDynamicSliceWindow(renderState));
-
       this.mountArchiveUiHost(archiveUi);
-      this.renderDynamicTimeline(archiveUi, trackEntries, renderState);
-      this.updateDynamicScrollBinding();
+    }
 
-      for (const entry of renderState.visibleEntries) {
-        if (!entry.record.richHtml && !entry.record.richRequestPending) {
-          this.requestRichSnapshot(entry.record);
+    measureVisibleDynamicRecordHeights(renderState) {
+      if (
+        !renderState
+        || !this.archiveUi
+        || !(this.archiveUi.list instanceof HTMLElement)
+        || !this.archiveUi.list.isConnected
+      ) {
+        return false;
+      }
+
+      const slotsByRecordId = new Map();
+      for (const slot of this.archiveUi.list.querySelectorAll("[data-rapid-view-for-chatgpt-dynamic-slot]")) {
+        if (!(slot instanceof HTMLElement)) {
+          continue;
+        }
+
+        const recordId = slot.getAttribute("data-rapid-view-for-chatgpt-dynamic-slot") || "";
+        if (recordId) {
+          slotsByRecordId.set(recordId, slot);
         }
       }
 
-      if (renderState.visibleEntries.some((entry) => entry.record.snapshotState === "pending")) {
-        this.scheduleDeferredSnapshotWork();
+      const tolerancePx = 2;
+      let changed = false;
+
+      for (const entry of renderState.visibleEntries || []) {
+        const record = entry.record;
+        if (!record || !record.id) {
+          continue;
+        }
+
+        const slot = slotsByRecordId.get(record.id);
+        const block = slot
+          ? slot.querySelector("[data-rapid-view-for-chatgpt-archive-block]")
+          : null;
+        if (!(block instanceof HTMLElement)) {
+          continue;
+        }
+
+        const actualBlockHeight = Math.ceil(this.measureNode(block));
+        const gapPx = this.getDynamicRecordGapPx(record);
+        const requiredTrackHeight = Math.max(1, actualBlockHeight + gapPx);
+        const currentTrackHeight = Math.max(
+          1,
+          Number(record.dynamicTrackHeightPx) || Number(entry.height) || LIMITS.dynamicScrollSlotHeightPx
+        );
+
+        record.dynamicRenderedHeight = Math.max(record.dynamicRenderedHeight || 0, actualBlockHeight);
+        record.estimatedHeight = Math.max(record.estimatedHeight || 0, actualBlockHeight);
+
+        if (requiredTrackHeight > currentTrackHeight + tolerancePx) {
+          record.dynamicTrackHeightPx = requiredTrackHeight;
+          record.dynamicTrackMeasureKey = this.getDynamicRecordMeasureKey(record, this.getDynamicRecordRenderSource(record));
+          changed = true;
+        }
       }
 
-      this.logger.info("sync-dynamic-archive-ui", {
-        durationMs: this.getDurationMs(startedAt),
-        indexedCount: trackEntries.length,
-        currentSliceIndex: renderState.currentSliceIndex,
-        sliceCount: renderState.sliceCount,
-        sliceHeight: Math.round(renderState.sliceHeight),
-        totalTrackHeight: Math.round(renderState.totalHeight),
-        contentTrackHeight: Math.round(renderState.contentHeight),
-        visibleRecordCount: renderState.visibleEntries.length,
-        hiddenCount: this.hiddenCount,
-        windowStartSlice: renderState.windowStartSlice,
-        windowEndSlice: renderState.windowEndSlice,
-        windowStartY: Math.round(renderState.windowStartY),
-        windowEndY: Math.round(renderState.windowEndY)
-      });
+      return changed;
     }
 
     getDynamicTrackRecords() {
@@ -6019,24 +6105,92 @@
       );
     }
 
-    getDynamicRecordRenderHtml(record) {
+    getDynamicPairInnerGapPx() {
+      return 6;
+    }
+
+    getDynamicPairOuterGapPx() {
+      return 28;
+    }
+
+    assignDynamicRecordPairGaps(records = this.records) {
+      const dynamicRecords = (Array.isArray(records) ? records : [])
+        .filter((record) => record && record.state !== "live");
+
+      for (const record of dynamicRecords) {
+        record.dynamicTrackGapPx = this.getDynamicPairOuterGapPx();
+      }
+
+      let index = 0;
+      while (index < dynamicRecords.length) {
+        const current = dynamicRecords[index];
+        const next = dynamicRecords[index + 1] || null;
+
+        if (current.role === "user" && next && next.role === "assistant") {
+          current.dynamicTrackGapPx = this.getDynamicPairInnerGapPx();
+          next.dynamicTrackGapPx = this.getDynamicPairOuterGapPx();
+          index += 2;
+          continue;
+        }
+
+        current.dynamicTrackGapPx = this.getDynamicPairOuterGapPx();
+        index += 1;
+      }
+    }
+
+    getDynamicRecordGapPx(record) {
+      const gapPx = Number(record && record.dynamicTrackGapPx);
+      return Number.isFinite(gapPx) && gapPx >= 0
+        ? gapPx
+        : this.getDynamicPairOuterGapPx();
+    }
+
+    getDynamicRecordRenderSource(record) {
       if (!record) {
-        return "<p>Preparing archived message...</p>";
+        return {
+          sourceType: "empty",
+          html: "<p>Preparing archived message...</p>"
+        };
       }
 
       if (record.richHtml) {
-        return record.richHtml;
+        return {
+          sourceType: "richHtml",
+          html: record.richHtml
+        };
       }
 
       if (record.snapshotHtml) {
-        return record.snapshotHtml;
+        return {
+          sourceType: "snapshotHtml",
+          html: record.snapshotHtml
+        };
       }
 
       if (record.plainTextFallback) {
-        return this.renderPlainTextHtml(record.plainTextFallback);
+        return {
+          sourceType: "plainTextFallback",
+          html: this.renderPlainTextHtml(record.plainTextFallback)
+        };
       }
 
-      return "<p>Preparing archived message...</p>";
+      return {
+        sourceType: "pending",
+        html: "<p>Preparing archived message...</p>"
+      };
+    }
+
+    getDynamicRecordMeasureKey(record, renderSource) {
+      const source = renderSource || this.getDynamicRecordRenderSource(record);
+      const html = String(source.html || "");
+      const sample = html.length > 160
+        ? `${html.slice(0, 80)}|${html.slice(-80)}`
+        : html;
+      return `pair-v2:${record && record.role ? record.role : "unknown"}:${source.sourceType || "unknown"}:${html.length}:gap:${this.getDynamicRecordGapPx(record)}:${sample}`;
+    }
+
+    getDynamicRecordRenderHtml(record) {
+      return this.getDynamicRecordRenderSource(record).html;
     }
 
     ensureDynamicTrackGeometry() {
@@ -6044,20 +6198,28 @@
         return;
       }
 
+      this.assignDynamicRecordPairGaps();
+
       const fallbackHeight = Math.max(1, LIMITS.dynamicScrollSlotHeightPx);
       let runningTop = 0;
 
       for (const record of this.records) {
         this.ensureDynamicRenderableRecord(record);
 
-        const html = this.getDynamicRecordRenderHtml(record);
-        if (!record.dynamicTrackHeightPx) {
+        const renderSource = this.getDynamicRecordRenderSource(record);
+        const measureKey = this.getDynamicRecordMeasureKey(record, renderSource);
+        const shouldMeasure = !record.dynamicTrackHeightPx || record.dynamicTrackMeasureKey !== measureKey;
+        if (shouldMeasure) {
           const chromeHeight = record.dynamicChromeHeightPx || this.measureDynamicChromeHeight(record.role);
-          const contentHeight = this.measureDynamicContentHtml(html);
+          const contentHeight = this.measureDynamicContentHtml(renderSource.html);
+          const minimumTrackHeight = ["empty", "pending"].includes(renderSource.sourceType)
+            ? fallbackHeight
+            : 1;
           record.dynamicChromeHeightPx = chromeHeight;
+          record.dynamicTrackMeasureKey = measureKey;
           record.dynamicTrackHeightPx = Math.max(
-            fallbackHeight,
-            Math.round(chromeHeight + contentHeight)
+            minimumTrackHeight,
+            Math.round(chromeHeight + contentHeight + this.getDynamicRecordGapPx(record))
           );
         }
 
